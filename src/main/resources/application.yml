@@ -1,0 +1,33 @@
+spring:
+  application:
+    name: compliance-sync-service
+  # H2 Database Configuration
+  datasource:
+    url: jdbc:h2:file:./data/compliance_state_db;AUTO_SERVER=TRUE
+    driverClassName: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    database-platform: org.hibernate.dialect.H2Dialect
+    hibernate:
+      ddl-auto: update # Creates/updates the schema on startup
+    show-sql: true
+  # Kafka Configuration
+  kafka:
+    bootstrap-servers: localhost:9092 # Change to your Kafka broker
+    consumer:
+      group-id: compliance-sync-group
+      auto-offset-reset: earliest
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+
+# Custom Application Properties
+app:
+  kafka:
+    topics:
+      ad-changes: ad-user-changes-topic
+      crt-changes: crt-team-changes-topic
+      dlt: compliance-sync.dlt # Dead Letter Topic
+  reconciliation:
+    cron: "0 0 2 * * ?" # 2 AM every day
