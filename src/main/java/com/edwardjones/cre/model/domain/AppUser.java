@@ -21,7 +21,7 @@ public class AppUser {
     private boolean isActive = true;
 
     // Relationship to team memberships
-    @OneToMany(mappedBy = "userUsername", fetch = FetchType.LAZY)
+    @OneToMany(mappedBy = "user", fetch = FetchType.LAZY)
     private List<UserTeamMembership> teamMemberships;
 
     // This is a derived/calculated field, not directly mapped to a column

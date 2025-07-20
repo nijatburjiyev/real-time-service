@@ -47,27 +47,105 @@ public class ChangeEventProcessor {
      */
     @Transactional
     public void processAdChange(AdChangeEvent event) {
-        log.info("Processing AD change for user '{}', property '{}'", event.getPjNumber(), event.getProperty());
+        log.info("Processing AD change for user '{}', changeType '{}', property '{}'",
+                event.getPjNumber(), event.getChangeType(), event.getProperty());
 
-        AppUser user = appUserRepository.findById(event.getPjNumber())
-                .orElseThrow(() -> new IllegalStateException("Received AD change event for user not in state DB: " + event.getPjNumber()));
+        // Handle different change types
+        if (event.isNewUser()) {
+            processNewUserEvent(event);
+            return;
+        }
+
+        if (event.isTerminatedUser()) {
+            processTerminatedUserEvent(event);
+            return;
+        }
+
+        // Handle DataChange events for existing users
+        if (event.isDataChange()) {
+            processDataChangeEvent(event);
+            return;
+        }
+
+        log.warn("Unknown AD change type '{}' for user '{}'", event.getChangeType(), event.getPjNumber());
+    }
+
+    /**
+     * Process new user creation events
+     */
+    private void processNewUserEvent(AdChangeEvent event) {
+        log.info("Processing new user creation: {}", event.getPjNumber());
+
+        // Check if user already exists (duplicate event handling)
+        Optional<AppUser> existingUser = appUserRepository.findById(event.getPjNumber());
+        if (existingUser.isPresent()) {
+            log.warn("NewUser event received for existing user: {}", event.getPjNumber());
+            return;
+        }
+
+        // For new users, we would typically need to fetch their full profile from AD
+        // For now, log that a new user needs to be created
+        log.info("New user {} requires full profile fetch and creation", event.getPjNumber());
+        // TODO: Implement full user profile fetch and creation logic
+    }
+
+    /**
+     * Process user termination events
+     */
+    private void processTerminatedUserEvent(AdChangeEvent event) {
+        log.info("Processing user termination: {}", event.getPjNumber());
+
+        Optional<AppUser> userOpt = appUserRepository.findById(event.getPjNumber());
+        if (userOpt.isEmpty()) {
+            log.warn("TerminatedUser event received for non-existent user: {}", event.getPjNumber());
+            return;
+        }
+
+        AppUser user = userOpt.get();
+        user.setActive(false);
+        appUserRepository.save(user);
+
+        // Calculate final configuration and push deactivation to vendor
+        AppUser finalConfig = complianceLogicService.calculateConfigurationForUser(user.getUsername());
+        vendorApiClient.updateUser(finalConfig);
+
+        log.info("User {} deactivated and vendor updated", event.getPjNumber());
+    }
+
+    /**
+     * Process data change events for existing users
+     */
+    private void processDataChangeEvent(AdChangeEvent event) {
+        log.info("Processing data change for user '{}', property '{}'", event.getPjNumber(), event.getProperty());
+
+        Optional<AppUser> userOpt = appUserRepository.findById(event.getPjNumber());
+        if (userOpt.isEmpty()) {
+            log.warn("DataChange event received for non-existent user: {}", event.getPjNumber());
+            return;
+        }
+
+        AppUser user = userOpt.get();
 
         // --- 1. Capture Old State & Identify Impact Scope ---
-        // We must calculate the old configuration BEFORE we apply any changes to the user entity.
         AppUser oldConfigUser = complianceLogicService.calculateConfigurationForUser(user.getUsername());
         Set<String> affectedUsernames = new HashSet<>();
-        affectedUsernames.add(user.getUsername()); // The user themselves is always affected.
+        affectedUsernames.add(user.getUsername());
 
         // --- 2. Apply the Change to the Local State Database ---
         boolean isImpactfulChange = applyAdChangeToUser(user, event);
+        if (!isImpactfulChange) {
+            log.info("DataChange for user '{}' property '{}' is not impactful", user.getUsername(), event.getProperty());
+            return;
+        }
+
         appUserRepository.save(user);
 
         // --- 3. Perform Impact Analysis ---
-        // If the change could affect a leader's team (e.g., title change), we must re-process all their reports.
         if (isImpactfulChange) {
             List<AppUser> directReports = appUserRepository.findByManagerUsername(user.getUsername());
             if (directReports != null && !directReports.isEmpty()) {
-                log.info("Change to leader {} is impactful. Queueing {} direct reports for reprocessing.", user.getUsername(), directReports.size());
+                log.info("Change to leader {} is impactful. Queueing {} direct reports for reprocessing.",
+                        user.getUsername(), directReports.size());
                 directReports.forEach(report -> affectedUsernames.add(report.getUsername()));
             }
         }
@@ -75,10 +153,9 @@ public class ChangeEventProcessor {
         // --- 4. Recalculate and Push Updates for All Affected Users ---
         log.info("Recalculating and pushing updates for {} affected users.", affectedUsernames.size());
         affectedUsernames.forEach(username -> {
-            // We compare the primary user's config, but always push updates for downstream users
             if (username.equals(user.getUsername())) {
                 AppUser newConfigUser = complianceLogicService.calculateConfigurationForUser(username);
-                if (!configurationChanged(oldConfigUser, newConfigUser)) {
+                if (configurationChanged(oldConfigUser, newConfigUser)) {
                     log.info("Configuration for user {} has changed. Pushing update.", username);
                     vendorApiClient.updateUser(newConfigUser);
                 } else {
@@ -86,74 +163,12 @@ public class ChangeEventProcessor {
                 }
             } else {
                 // For downstream users (direct reports), recalculate and push unconditionally
-                // as their config may have changed due to their leader's update.
                 AppUser reportConfig = complianceLogicService.calculateConfigurationForUser(username);
                 vendorApiClient.updateUser(reportConfig);
             }
         });
     }
 
-    /**
-     * Processes a change event from the CRBT team system.
-     * This is more complex as a team change can affect many users.
-     *
-     * @param event The deserialized Kafka message for a CRT change.
-     */
-    @Transactional
-    public void processCrtChange(CrtChangeEvent event) {
-        log.info("Processing CRBT change for team ID '{}'", event.getCrbtId());
-
-        CrbtTeam team = crbtTeamRepository.findById(event.getCrbtId()).orElse(new CrbtTeam());
-        team.setCrbtId(event.getCrbtId());
-        team.setTeamType(event.getTeamType());
-        team.setActive(event.getEffectiveEndDate() == null);
-        crbtTeamRepository.save(team);
-
-        // --- 1. Identify All Users Associated with the Team (Past and Present) ---
-        // This is crucial to find users who may have been removed.
-        Set<String> affectedUsernames = userTeamMembershipRepository.findByTeamCrbtId(team.getCrbtId())
-                .stream()
-                .map(membership -> membership.getId().getUserUsername())
-                .collect(Collectors.toSet());
-
-        // --- 2. Update Team Memberships in the State Database ---
-        if (event.getMembers() != null) {
-            CrtChangeEvent.CrtMemberChange memberChange = event.getMembers();
-            Optional<AppUser> memberUserOpt = appUserRepository.findByEmployeeId(memberChange.getEmployeeId());
-            if (memberUserOpt.isEmpty()) {
-                log.warn("Could not find user for employeeId {} from CRT event. Skipping membership update.", memberChange.getEmployeeId());
-            } else {
-                AppUser memberUser = memberUserOpt.get();
-                // Add this user to the affected list, as they are part of the current event
-                affectedUsernames.add(memberUser.getUsername());
-
-                UserTeamMembershipId id = new UserTeamMembershipId(memberUser.getUsername(), team.getCrbtId());
-
-                UserTeamMembership membership = userTeamMembershipRepository.findById(id).orElse(new UserTeamMembership());
-                membership.setId(id);
-                membership.setUser(memberUser);
-                membership.setTeam(team);
-                membership.setMemberRole(memberChange.getRole());
-                membership.setEffectiveEndDate(memberChange.getMemberEffectiveEndDate());
-                membership.setEffectiveStartDate(memberChange.getMemberEffectiveBeginDate());
-
-                userTeamMembershipRepository.save(membership);
-            }
-        }
-
-        // --- 3. Recalculate and Push for All Affected Users ---
-        // A team change can alter the Group/VP for every member.
-        log.info("CRBT change requires reprocessing for {} users associated with team {}.", affectedUsernames.size(), team.getCrbtId());
-
-        // You might also need to push updates for the Group/VP entities themselves first
-        // vendorApiClient.updateGroup( ... );
-        // vendorApiClient.updateVisibilityProfile( ... );
-
-        affectedUsernames.forEach(username -> {
-            AppUser newConfig = complianceLogicService.calculateConfigurationForUser(username);
-            vendorApiClient.updateUser(newConfig);
-        });
-    }
 
     /**
      * Helper method to apply changes from an AD event to a user entity.
@@ -173,6 +188,18 @@ public class ChangeEventProcessor {
                 return true; // A leader's OU change could affect report configurations.
             case "enabled":
                 user.setActive("true".equalsIgnoreCase(event.getNewValue()));
+                return false;
+            case "ej-irnumber":
+                user.setEmployeeId(event.getNewValue());
+                return false; // Employee ID changes typically don't impact direct reports
+            case "state":
+                user.setCountry(event.getNewValue());
+                return true; // State/location changes could affect compliance groups
+            case "name":
+                // For Name changes, this is typically handled by NewUser/TerminatedUser events
+                // but we'll log it for tracking purposes
+                log.info("Name change detected for user {}: {} -> {}",
+                        user.getUsername(), event.getBeforeValue(), event.getNewValue());
                 return false;
             default:
                 log.warn("Received unhandled AD property change for user {}: {}", user.getUsername(), event.getProperty());
@@ -202,5 +229,169 @@ public class ChangeEventProcessor {
     private boolean configurationChanged(AppUser oldConfig, AppUser newConfig) {
         return !Objects.equals(oldConfig.getCalculatedGroups(), newConfig.getCalculatedGroups()) ||
                !Objects.equals(oldConfig.getCalculatedVisibilityProfile(), newConfig.getCalculatedVisibilityProfile());
+    }
+
+    /**
+     * Processes a change event from the CRT (CRBT) system.
+     * This method handles team membership changes, role changes, and team deactivations.
+     *
+     * @param event The deserialized Kafka message for a CRT change.
+     */
+    @Transactional
+    public void processCrtChange(CrtChangeEvent event) {
+        log.info("Processing CRT change for team '{}' ({}), member '{}'",
+                event.getCrbtId(), event.getTeamType(),
+                event.getMembers() != null ? event.getMembers().getEmployeeId() : "unknown");
+
+        // Handle team deactivation
+        if (event.isTeamDeactivated()) {
+            processTeamDeactivation(event);
+            return;
+        }
+
+        // Handle member leaving
+        if (event.isMemberLeaving()) {
+            processMemberLeaving(event);
+            return;
+        }
+
+        // Handle member addition or role change
+        processMemberChange(event);
+    }
+
+    /**
+     * Process team deactivation events
+     */
+    private void processTeamDeactivation(CrtChangeEvent event) {
+        log.info("Processing team deactivation for team {}", event.getCrbtId());
+
+        Optional<CrbtTeam> teamOpt = crbtTeamRepository.findById(event.getCrbtId());
+        if (teamOpt.isEmpty()) {
+            log.warn("Team deactivation event received for non-existent team: {}", event.getCrbtId());
+            return;
+        }
+
+        CrbtTeam team = teamOpt.get();
+        team.setActive(false);
+        crbtTeamRepository.save(team);
+
+        // Remove all memberships for this team
+        List<UserTeamMembership> memberships = userTeamMembershipRepository.findByTeamCrbtId(event.getCrbtId());
+        userTeamMembershipRepository.deleteAll(memberships);
+
+        // Recalculate configurations for all affected users
+        Set<String> affectedUsers = memberships.stream()
+                .map(membership -> membership.getId().getUserUsername())
+                .collect(Collectors.toSet());
+
+        recalculateAndPushUpdates(affectedUsers);
+        log.info("Team {} deactivated and {} users recalculated", event.getCrbtId(), affectedUsers.size());
+    }
+
+    /**
+     * Process member leaving events
+     */
+    private void processMemberLeaving(CrtChangeEvent event) {
+        log.info("Processing member leaving for team {} member {}",
+                event.getCrbtId(), event.getMembers().getEmployeeId());
+
+        // Find the user by employee ID
+        Optional<AppUser> userOpt = appUserRepository.findByEmployeeId(event.getMembers().getEmployeeId());
+        if (userOpt.isEmpty()) {
+            log.warn("Member leaving event received for non-existent user: {}", event.getMembers().getEmployeeId());
+            return;
+        }
+
+        AppUser user = userOpt.get();
+        UserTeamMembershipId membershipId = new UserTeamMembershipId(user.getUsername(), event.getCrbtId());
+
+        Optional<UserTeamMembership> membershipOpt = userTeamMembershipRepository.findById(membershipId);
+        if (membershipOpt.isPresent()) {
+            userTeamMembershipRepository.delete(membershipOpt.get());
+
+            // Recalculate and push update for this user
+            AppUser updatedConfig = complianceLogicService.calculateConfigurationForUser(user.getUsername());
+            vendorApiClient.updateUser(updatedConfig);
+
+            log.info("User {} removed from team {} and configuration updated", user.getUsername(), event.getCrbtId());
+        } else {
+            log.warn("Member leaving event for user {} not in team {}", user.getUsername(), event.getCrbtId());
+        }
+    }
+
+    /**
+     * Process member addition or role change events
+     */
+    private void processMemberChange(CrtChangeEvent event) {
+        log.info("Processing member change for team {} member {} role {}",
+                event.getCrbtId(), event.getMembers().getEmployeeId(), event.getMembers().getRole());
+
+        // Find or validate the team exists
+        Optional<CrbtTeam> teamOpt = crbtTeamRepository.findById(event.getCrbtId());
+        if (teamOpt.isEmpty()) {
+            log.warn("Member change event received for non-existent team: {}", event.getCrbtId());
+            return;
+        }
+
+        // Find the user by employee ID
+        Optional<AppUser> userOpt = appUserRepository.findByEmployeeId(event.getMembers().getEmployeeId());
+        if (userOpt.isEmpty()) {
+            log.warn("Member change event received for non-existent user: {}", event.getMembers().getEmployeeId());
+            return;
+        }
+
+        AppUser user = userOpt.get();
+        CrbtTeam team = teamOpt.get();
+
+        UserTeamMembershipId membershipId = new UserTeamMembershipId(user.getUsername(), event.getCrbtId());
+        Optional<UserTeamMembership> existingMembership = userTeamMembershipRepository.findById(membershipId);
+
+        if (existingMembership.isPresent()) {
+            // Update existing membership role
+            UserTeamMembership membership = existingMembership.get();
+            String oldRole = membership.getMemberRole();
+            membership.setMemberRole(event.getMembers().getRole());
+            userTeamMembershipRepository.save(membership);
+
+            log.info("Updated user {} role in team {} from {} to {}",
+                    user.getUsername(), event.getCrbtId(), oldRole, event.getMembers().getRole());
+        } else {
+            // Create new membership
+            UserTeamMembership newMembership = new UserTeamMembership();
+            newMembership.setId(membershipId);
+            newMembership.setUser(user);
+            newMembership.setTeam(team);
+            newMembership.setMemberRole(event.getMembers().getRole());
+            userTeamMembershipRepository.save(newMembership);
+
+            log.info("Added user {} to team {} with role {}",
+                    user.getUsername(), event.getCrbtId(), event.getMembers().getRole());
+        }
+
+        // Recalculate and push update for this user
+        AppUser updatedConfig = complianceLogicService.calculateConfigurationForUser(user.getUsername());
+        vendorApiClient.updateUser(updatedConfig);
+
+        // If this is a managerial change, also update any direct reports
+        if (event.isManagerialChange()) {
+            List<AppUser> directReports = appUserRepository.findByManagerUsername(user.getUsername());
+            if (!directReports.isEmpty()) {
+                log.info("Managerial change detected. Recalculating {} direct reports", directReports.size());
+                Set<String> reportUsernames = directReports.stream()
+                        .map(AppUser::getUsername)
+                        .collect(Collectors.toSet());
+                recalculateAndPushUpdates(reportUsernames);
+            }
+        }
+    }
+
+    /**
+     * Helper method to recalculate and push updates for multiple users
+     */
+    private void recalculateAndPushUpdates(Set<String> usernames) {
+        usernames.forEach(username -> {
+            AppUser updatedConfig = complianceLogicService.calculateConfigurationForUser(username);
+            vendorApiClient.updateUser(updatedConfig);
+        });
     }
 }

@@ -8,13 +8,13 @@ import java.time.LocalDate;
 @Data
 @JsonIgnoreProperties(ignoreUnknown = true) // Safely ignore fields we don't need
 public class CrtChangeEvent {
-    @JsonProperty("crbtId") // Changed from "cIbtId" to match actual message
+    @JsonProperty("crbtId")
     private Integer crbtId;
 
     @JsonProperty("irNo")
     private Integer irNumber;
 
-    @JsonProperty("brNo") // Changed from "bINo" to match actual message
+    @JsonProperty("brNo")
     private Integer brNumber;
 
     @JsonProperty("crbtNa")
@@ -29,7 +29,7 @@ public class CrtChangeEvent {
     @JsonProperty("advsryLtrIrTyCd")
     private String advisoryLetterType;
 
-    @JsonProperty("crbtTeamTyCd")
+    @JsonProperty("crbtTeamTyCd") // Updated to match exact Kafka field name
     private String teamType;
 
     @JsonProperty("irDsplyNaTyCd")
@@ -39,7 +39,7 @@ public class CrtChangeEvent {
     private Integer assistantSubTeamId;
 
     @JsonProperty("members")
-    private CrtMemberChange members; // Single object as shown in actual message
+    private CrtMemberChange members; // Single object as shown in your Kafka example
 
     @Data
     @JsonIgnoreProperties(ignoreUnknown = true)
@@ -47,7 +47,7 @@ public class CrtChangeEvent {
         @JsonProperty("emplId")
         private String employeeId;
 
-        @JsonProperty("crbtRoleCd") // Changed from "erbtRoleCd" to match actual message
+        @JsonProperty("crbtRoleCd") // Updated to match exact Kafka field name
         private String role;
 
         @JsonProperty("roleSvcPriCd")
@@ -78,8 +78,20 @@ public class CrtChangeEvent {
     public boolean isManagerialChange() {
         return members != null &&
                ("BOA".equalsIgnoreCase(members.getRole()) ||
+                "LEAD".equalsIgnoreCase(members.getRole()) ||
+                "FA".equalsIgnoreCase(members.getRole()) ||
                 "VTM".equalsIgnoreCase(teamType) ||
                 "HTM".equalsIgnoreCase(teamType) ||
-                "ACM".equalsIgnoreCase(teamType)); // Added ACM as shown in your example
+                "SFA".equalsIgnoreCase(teamType));
+    }
+
+    /**
+     * Helper to determine if this member is leaving the team.
+     * @return true if the member's effective end date is set or ejcInd is "Y"
+     */
+    public boolean isMemberLeaving() {
+        return members != null &&
+               (members.getMemberEffectiveEndDate() != null ||
+                "Y".equalsIgnoreCase(members.getEjcIndicator()));
     }
 }

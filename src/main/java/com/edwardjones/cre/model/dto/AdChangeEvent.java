@@ -7,6 +7,15 @@ import lombok.Data;
 @Data
 @JsonIgnoreProperties(ignoreUnknown = true) // Safely ignore any fields in the JSON we don't care about
 public class AdChangeEvent {
+    @JsonProperty("AfterDate")
+    private String afterDate;
+
+    @JsonProperty("BeforeDate")
+    private String beforeDate;
+
+    @JsonProperty("ProcessedDate")
+    private String processedDate;
+
     @JsonProperty("PJNumber")
     private String pjNumber;
 
@@ -37,6 +46,32 @@ public class AdChangeEvent {
     public boolean isImpactfulChange() {
         return "Title".equalsIgnoreCase(property) ||
                "DistinguishedName".equalsIgnoreCase(property) ||
+               "ej-IRNumber".equalsIgnoreCase(property) ||
+               "State".equalsIgnoreCase(property) ||
                isManagerialChange();
+    }
+
+    /**
+     * Checks if this is a new user creation event.
+     * @return true if the ChangeType is 'NewUser'
+     */
+    public boolean isNewUser() {
+        return "NewUser".equalsIgnoreCase(changeType);
+    }
+
+    /**
+     * Checks if this is a user termination event.
+     * @return true if the ChangeType is 'TerminatedUser'
+     */
+    public boolean isTerminatedUser() {
+        return "TerminatedUser".equalsIgnoreCase(changeType);
+    }
+
+    /**
+     * Checks if this is a data change event.
+     * @return true if the ChangeType is 'DataChange'
+     */
+    public boolean isDataChange() {
+        return "DataChange".equalsIgnoreCase(changeType);
     }
 }
