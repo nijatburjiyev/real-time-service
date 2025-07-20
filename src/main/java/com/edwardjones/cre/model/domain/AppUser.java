@@ -2,6 +2,7 @@ package com.edwardjones.cre.model.domain;
 
 import jakarta.persistence.*;
 import lombok.Data;
+import java.util.List;
 import java.util.Set;
 
 @Data
@@ -16,7 +17,12 @@ public class AppUser {
     @Column(length = 1024)
     private String distinguishedName;
     private String managerUsername;
+    private String country; // Added country field
     private boolean isActive = true;
+
+    // Relationship to team memberships
+    @OneToMany(mappedBy = "userUsername", fetch = FetchType.LAZY)
+    private List<UserTeamMembership> teamMemberships;
 
     // This is a derived/calculated field, not directly mapped to a column
     @Transient
