@@ -40,13 +40,7 @@ class ComplianceLogicServiceTest {
     @BeforeEach
     void setUp() {
         // Before each test, ensure the database is in a known state with fresh test data
-        try {
-            testDataInitializer.setupInitialState();
-        } catch (Exception e) {
-            log.warn("Initial data setup failed, will continue with existing data: {}", e.getMessage());
-            // If setup fails, we'll work with whatever data is already there
-            // This prevents test failures due to initialization issues
-        }
+        testDataInitializer.setupInitialState();
     }
 
     /**
@@ -188,85 +182,66 @@ class ComplianceLogicServiceTest {
     }
 
     /**
-     * Test Case 5: Multi-Team Member (Team Precedence Logic)
+     * Test Case 5: Multi-Team Member (Team Precedence Logic) - REWRITTEN
      *
-     * Scenario: A user who is a member of multiple teams
-     * Expected: Configuration based on highest precedence team (VTM > HTM > SFA)
+     * Scenario: A user is a member of a VTM, HTM, and SFA team.
+     * Expected: Configuration should be based ONLY on the VTM team (highest precedence).
      */
     @Test
     @Transactional
     void testMultiTeamMember_TeamPrecedence() {
-        // GIVEN: A user who is in multiple teams to test precedence logic
-        String username = "p500001"; // Michael Thompson - should be in HTM team as LEAD
+        // GIVEN: A user who is in VTM, HTM, and SFA teams
+        String username = "multi01";
+        testDataInitializer.setupMultiTeamUser();
 
         // WHEN: We calculate their configuration
         AppUser result = complianceLogicService.calculateConfigurationForUser(username);
 
-        // THEN: Should get configuration based on highest precedence team
+        // THEN: The configuration should be based on the highest precedence team (VTM)
         assertNotNull(result, "Result should not be null");
-
         String vpProfile = result.getCalculatedVisibilityProfile();
         assertNotNull(vpProfile, "Visibility profile should not be null");
 
-        // HTM team should take precedence over SFA if user is in both
-        // The profile should reflect team-based configuration for HTM
-        boolean hasHtmConfiguration = vpProfile.contains("HTM") ||
-                                     result.getCalculatedGroups().stream()
-                                             .anyMatch(group -> group.contains("HTM"));
+        // The profile name should contain the VTM team name
+        assertTrue(vpProfile.contains("JOHN_FRANK"), "VP should be based on the VTM team");
+        // The profile name should NOT contain the lower precedence team names
+        assertFalse(vpProfile.contains("TECHNOLOGY_SOLUTIONS"), "VP should NOT be based on the HTM team");
+        assertFalse(vpProfile.contains("COMPLIANCE_OVERSIGHT"), "VP should NOT be based on the SFA team");
 
-        if (hasHtmConfiguration) {
-            log.info("✅ Multi-team precedence test passed - HTM configuration detected");
-        } else {
-            // If not HTM, verify the user has some valid team configuration
-            assertTrue(result.getCalculatedGroups().size() > 0,
-                      "User should have at least one group assignment");
-        }
+        assertTrue(result.getCalculatedGroups().contains("US Field Submitters"), "User should have the base submitter group");
 
-        log.info("Multi-team member {}: Profile={}, Groups={}",
+        log.info("✅ Multi-Team Member Precedence test passed for {}: Profile={}, Groups={}",
                 username, result.getCalculatedVisibilityProfile(), result.getCalculatedGroups());
-
-        // Verify user has appropriate submitters group based on location
-        boolean hasSubmittersGroup = result.getCalculatedGroups().stream()
-                .anyMatch(group -> group.contains("Submitters"));
-        assertTrue(hasSubmittersGroup, "User should have a submitters group");
-
-        log.info("✅ Multi-Team Member test passed for {}", username);
     }
 
     /**
-     * Test Case 6: Hybrid Home Office/Branch User (HOBR)
+     * Test Case 6: Hybrid Home Office/Branch User (HOBR) - REWRITTEN
      *
-     * Scenario: A user who has both Home Office and Branch characteristics
-     * Expected: Hybrid configuration combining both profiles
+     * Scenario: A user with an HO distinguished name but a Branch-related title.
+     * Expected: A combined HOBR profile and membership in BOTH HO and Branch submitter groups.
      */
     @Test
     @Transactional
     void testHybridUser_HOBR() {
-        // GIVEN: A user who has HOBR characteristics (works in branch but reports to HO)
-        String username = "p600001"; // Sarah Williams - Senior BOA, could have hybrid traits
+        // GIVEN: A user with both Home Office and Branch characteristics
+        String username = "hobr001";
+        testDataInitializer.setupHybridUser();
 
         // WHEN: We calculate their configuration
         AppUser result = complianceLogicService.calculateConfigurationForUser(username);
 
-        // THEN: Should have appropriate configuration based on their role
+        // THEN: Should have a specific HOBR profile and dual submitter groups
         assertNotNull(result, "Result should not be null");
 
-        String vpProfile = result.getCalculatedVisibilityProfile();
-        assertNotNull(vpProfile, "Visibility profile should not be null");
-        assertFalse(result.getCalculatedGroups().isEmpty(), "Should have at least one group");
+        // Assert the specific visibility profile for HOBR
+        assertEquals("Vis-US-HO-BR", result.getCalculatedVisibilityProfile(),
+                     "Hybrid user should have the specific 'Vis-US-HO-BR' profile");
 
-        // For a Senior BOA, expect either BR (Branch) or team-based configuration
-        boolean hasBranchProfile = vpProfile.contains("BR") || vpProfile.contains("US-");
-        boolean hasFieldSubmitters = result.getCalculatedGroups().contains("US Field Submitters");
-
-        // Should have either branch-specific profile or team-based profile
-        assertTrue(hasBranchProfile || !result.getCalculatedGroups().isEmpty(),
-                  "HOBR user should have branch or team-based configuration");
-
-        // Verify they have appropriate submitters group
-        boolean hasSubmittersGroup = result.getCalculatedGroups().stream()
-                .anyMatch(group -> group.contains("Submitters"));
-        assertTrue(hasSubmittersGroup, "HOBR user should have a submitters group");
+        // Assert membership in BOTH submitter groups
+        assertTrue(result.getCalculatedGroups().contains("US Home Office Submitters"),
+                   "Hybrid user should be in the Home Office submitters group");
+        assertTrue(result.getCalculatedGroups().contains("US Field Submitters"),
+                   "Hybrid user should be in the Field submitters group");
 
         log.info("✅ Hybrid User test passed for {}: Profile={}, Groups={}",
                 username, result.getCalculatedVisibilityProfile(), result.getCalculatedGroups());
