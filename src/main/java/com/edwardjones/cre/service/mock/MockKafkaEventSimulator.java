@@ -7,6 +7,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
+import org.springframework.context.annotation.Profile;
+import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
@@ -17,17 +19,26 @@ import java.time.LocalDate;
  */
 @Slf4j
 @Service
+@Profile("!test")
 @RequiredArgsConstructor
 public class MockKafkaEventSimulator {
 
     private final ChangeEventProcessor changeEventProcessor;
+    private final Environment environment;
 
     /**
      * Automatically triggers realistic mock events after the application starts up
      * using the actual AD user data and CRBT team structures.
+     * Disabled during tests to prevent interference.
      */
     @EventListener(ApplicationReadyEvent.class)
     public void simulateKafkaEvents() {
+        // Skip simulation when running in test profile
+        if (isTestProfile()) {
+            log.info("Mock Kafka event simulation skipped - running in test profile");
+            return;
+        }
+
         log.info("=== Starting Realistic Mock Kafka Event Simulation ===");
 
         // Wait a moment for bootstrap to complete
@@ -51,6 +62,16 @@ public class MockKafkaEventSimulator {
         simulateRealisticCrtEvents();
 
         log.info("=== Realistic Mock Kafka Event Simulation Complete ===");
+    }
+
+    private boolean isTestProfile() {
+        String[] activeProfiles = environment.getActiveProfiles();
+        for (String profile : activeProfiles) {
+            if ("test".equals(profile)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

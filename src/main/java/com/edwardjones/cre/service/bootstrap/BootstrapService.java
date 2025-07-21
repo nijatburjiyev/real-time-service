@@ -37,47 +37,74 @@ public class BootstrapService {
     @PostConstruct
     @Transactional
     public void initializeState() {
-        // Skip bootstrap initialization when running in test profile
-        if (isTestProfile()) {
-            log.info("Bootstrap initialization skipped - running in test profile");
-            return;
-        }
+        // Bootstrap will now always run when the application starts, including during tests
+        performBootstrap();
+    }
 
+    /**
+     * Public method to allow manual bootstrap triggering during tests.
+     * This enables tests to control when bootstrap happens with mock data.
+     */
+    @Transactional
+    public void performBootstrap() {
         log.info("--- STARTING BOOTSTRAP PROCESS ---");
 
         // Clear old state
         userTeamMembershipRepository.deleteAll();
+
+        // First, set all manager references to null to break circular dependencies
+        appUserRepository.findAll().forEach(user -> {
+            user.setManagerUsername(null);
+            appUserRepository.save(user);
+        });
+        appUserRepository.flush();
+
+        // Now we can safely delete all users
         appUserRepository.deleteAll();
         crbtTeamRepository.deleteAll();
 
-        // Fetch from sources
+        // Fetch from sources (will use mock implementations in test profile)
         var usersFromAd = adLdapClient.fetchAllUsers();
         var teams = crbtApiClient.fetchAllTeams();
 
         // --- FIX: Two-stage user saving to avoid foreign key violations ---
-        // Stage 1: Save all users without manager links to ensure all PKs exist
+        // Stage 1: Save all users without ANY manager references
         Map<String, String> managerMapping = new HashMap<>();
         Set<String> existingUsernames = new HashSet<>();
 
         usersFromAd.forEach(user -> {
             managerMapping.put(user.getUsername(), user.getManagerUsername()); // Save the mapping
             existingUsernames.add(user.getUsername()); // Track all valid usernames
-            user.setManagerUsername(null); // Temporarily nullify for the first save
-        });
-        appUserRepository.saveAll(usersFromAd);
-        appUserRepository.flush(); // Force the insert to the DB
-
-        // Stage 2: Re-apply the manager links, but only for valid manager references
-        usersFromAd.forEach(user -> {
-            String originalManagerUsername = managerMapping.get(user.getUsername());
-            if (originalManagerUsername != null && existingUsernames.contains(originalManagerUsername)) {
-                user.setManagerUsername(originalManagerUsername);
-            } else if (originalManagerUsername != null) {
-                log.warn("Skipping invalid manager reference: {} -> {}", user.getUsername(), originalManagerUsername);
-                user.setManagerUsername(null); // Keep as null for orphaned references
+            user.setManagerUsername(null); // Clear FK field
+            user.setManager(null); // Clear entity reference
+            // Also clear any collections that might cause issues
+            if (user.getDirectReports() != null) {
+                user.getDirectReports().clear();
+            }
+            if (user.getTeamMemberships() != null) {
+                user.getTeamMemberships().clear();
             }
         });
-        appUserRepository.saveAll(usersFromAd);
+
+        // Save each user individually to avoid batch processing issues
+        for (AppUser user : usersFromAd) {
+            appUserRepository.save(user);
+        }
+        appUserRepository.flush(); // Force the insert to the DB
+
+        // Stage 2: Re-apply the manager links one by one to avoid lazy loading issues
+        for (String username : existingUsernames) {
+            String originalManagerUsername = managerMapping.get(username);
+            if (originalManagerUsername != null && existingUsernames.contains(originalManagerUsername)) {
+                // Update only the manager field, not the whole entity
+                AppUser user = appUserRepository.findById(username).orElseThrow();
+                user.setManagerUsername(originalManagerUsername);
+                appUserRepository.save(user);
+            } else if (originalManagerUsername != null) {
+                log.warn("Skipping invalid manager reference: {} -> {}", username, originalManagerUsername);
+            }
+        }
+        appUserRepository.flush();
 
         // Save teams (no foreign key dependencies)
         crbtTeamRepository.saveAll(teams);
@@ -88,16 +115,6 @@ public class BootstrapService {
         createTeamMembershipsFromCrbtApi();
 
         log.info("--- BOOTSTRAP PROCESS COMPLETE ---");
-    }
-
-    private boolean isTestProfile() {
-        String[] activeProfiles = environment.getActiveProfiles();
-        for (String profile : activeProfiles) {
-            if ("test".equals(profile)) {
-                return true;
-            }
-        }
-        return false;
     }
 
     /**

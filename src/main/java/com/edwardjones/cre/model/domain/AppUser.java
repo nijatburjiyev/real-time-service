@@ -1,11 +1,14 @@
 package com.edwardjones.cre.model.domain;
 
 import jakarta.persistence.*;
-import lombok.Data;
+import lombok.Getter;
+import lombok.Setter;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.Objects;
 
-@Data
+@Getter
+@Setter
 @Entity
 public class AppUser {
     @Id
@@ -45,4 +48,32 @@ public class AppUser {
 
     @Transient
     private Set<String> calculatedGroups;
+
+    // Custom equals and hashCode to prevent Hibernate circular dependency issues
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        AppUser appUser = (AppUser) o;
+        return Objects.equals(username, appUser.username);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(username);
+    }
+
+    @Override
+    public String toString() {
+        return "AppUser{" +
+                "username='" + username + '\'' +
+                ", employeeId='" + employeeId + '\'' +
+                ", firstName='" + firstName + '\'' +
+                ", lastName='" + lastName + '\'' +
+                ", title='" + title + '\'' +
+                ", country='" + country + '\'' +
+                ", isActive=" + isActive +
+                ", managerUsername='" + managerUsername + '\'' +
+                '}';
+    }
 }

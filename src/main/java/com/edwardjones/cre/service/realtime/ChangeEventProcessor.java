@@ -306,8 +306,14 @@ public class ChangeEventProcessor {
     private boolean applyAdChangeToUser(AppUser user, AdChangeEvent event) {
         switch (event.getProperty().toLowerCase()) {
             case "manager":
-                user.setManagerUsername(parsePjFromDn(event.getNewValue()));
-                return false; // Changing a user's manager doesn't impact their reports
+            case "managerusername":
+                // Handle both DN format and direct username format
+                String newManagerUsername = event.getNewValue();
+                if (newManagerUsername != null && newManagerUsername.startsWith("CN=")) {
+                    newManagerUsername = parsePjFromDn(newManagerUsername);
+                }
+                user.setManagerUsername(newManagerUsername);
+                return true; // Manager changes should trigger recalculation and vendor updates
             case "title":
                 user.setTitle(event.getNewValue());
                 return true; // A leader's title change can affect group names
@@ -327,6 +333,9 @@ public class ChangeEventProcessor {
                 log.info("📛 Name change detected for user {}: {} -> {}",
                         user.getUsername(), event.getBeforeValue(), event.getNewValue());
                 return false;
+            case "teamrole":
+                // Handle team role changes - this is an impactful change
+                return true;
             default:
                 log.warn("⚠️ Unhandled AD property change for user {}: {}", user.getUsername(), event.getProperty());
                 return false;

@@ -6,14 +6,16 @@ import com.edwardjones.cre.model.domain.AppUser;
 import com.edwardjones.cre.repository.AppUserRepository;
 import com.edwardjones.cre.service.mock.MockKafkaEventSimulator;
 import com.edwardjones.cre.service.reconciliation.ReconciliationService;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Profile;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Test controller for manually triggering mock scenarios and monitoring the application.
@@ -22,14 +24,27 @@ import java.util.Map;
 @Slf4j
 @RestController
 @RequestMapping("/api/test")
-@RequiredArgsConstructor
+@Profile("!test")
 public class TestController {
 
-    private final MockKafkaEventSimulator mockKafkaEventSimulator;
+    private final Optional<MockKafkaEventSimulator> mockKafkaEventSimulator;
     private final ComplianceLogicService complianceLogicService;
     private final VendorApiClient vendorApiClient;
     private final AppUserRepository appUserRepository;
     private final ReconciliationService reconciliationService;
+
+    @Autowired
+    public TestController(Optional<MockKafkaEventSimulator> mockKafkaEventSimulator,
+                          ComplianceLogicService complianceLogicService,
+                          VendorApiClient vendorApiClient,
+                          AppUserRepository appUserRepository,
+                          ReconciliationService reconciliationService) {
+        this.mockKafkaEventSimulator = mockKafkaEventSimulator;
+        this.complianceLogicService = complianceLogicService;
+        this.vendorApiClient = vendorApiClient;
+        this.appUserRepository = appUserRepository;
+        this.reconciliationService = reconciliationService;
+    }
 
     /**
      * Trigger mock Kafka events to test real-time processing
@@ -43,7 +58,7 @@ public class TestController {
         response.put("timestamp", System.currentTimeMillis());
 
         try {
-            mockKafkaEventSimulator.triggerSpecificScenario(scenario);
+            mockKafkaEventSimulator.get().triggerSpecificScenario(scenario);
             response.put("status", "success");
             response.put("message", "Events triggered successfully");
         } catch (Exception e) {
