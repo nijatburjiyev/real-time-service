@@ -12,11 +12,16 @@ import com.edwardjones.cre.repository.UserTeamMembershipRepository;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 @Slf4j
 @Service
@@ -27,10 +32,17 @@ public class BootstrapService {
     private final AppUserRepository appUserRepository;
     private final CrbtTeamRepository crbtTeamRepository;
     private final UserTeamMembershipRepository userTeamMembershipRepository;
+    private final Environment environment;
 
     @PostConstruct
     @Transactional
     public void initializeState() {
+        // Skip bootstrap initialization when running in test profile
+        if (isTestProfile()) {
+            log.info("Bootstrap initialization skipped - running in test profile");
+            return;
+        }
+
         log.info("--- STARTING BOOTSTRAP PROCESS ---");
 
         // Clear old state
@@ -39,19 +51,53 @@ public class BootstrapService {
         crbtTeamRepository.deleteAll();
 
         // Fetch from sources
-        var users = adLdapClient.fetchAllUsers();
+        var usersFromAd = adLdapClient.fetchAllUsers();
         var teams = crbtApiClient.fetchAllTeams();
 
-        // Populate H2 with basic entities first
-        appUserRepository.saveAll(users);
+        // --- FIX: Two-stage user saving to avoid foreign key violations ---
+        // Stage 1: Save all users without manager links to ensure all PKs exist
+        Map<String, String> managerMapping = new HashMap<>();
+        Set<String> existingUsernames = new HashSet<>();
+
+        usersFromAd.forEach(user -> {
+            managerMapping.put(user.getUsername(), user.getManagerUsername()); // Save the mapping
+            existingUsernames.add(user.getUsername()); // Track all valid usernames
+            user.setManagerUsername(null); // Temporarily nullify for the first save
+        });
+        appUserRepository.saveAll(usersFromAd);
+        appUserRepository.flush(); // Force the insert to the DB
+
+        // Stage 2: Re-apply the manager links, but only for valid manager references
+        usersFromAd.forEach(user -> {
+            String originalManagerUsername = managerMapping.get(user.getUsername());
+            if (originalManagerUsername != null && existingUsernames.contains(originalManagerUsername)) {
+                user.setManagerUsername(originalManagerUsername);
+            } else if (originalManagerUsername != null) {
+                log.warn("Skipping invalid manager reference: {} -> {}", user.getUsername(), originalManagerUsername);
+                user.setManagerUsername(null); // Keep as null for orphaned references
+            }
+        });
+        appUserRepository.saveAll(usersFromAd);
+
+        // Save teams (no foreign key dependencies)
         crbtTeamRepository.saveAll(teams);
 
-        log.info("Bootstrap: Saved {} users and {} teams", users.size(), teams.size());
+        log.info("Bootstrap: Saved {} users and {} teams", usersFromAd.size(), teams.size());
 
         // Now fetch teams with member details and create memberships
         createTeamMembershipsFromCrbtApi();
 
         log.info("--- BOOTSTRAP PROCESS COMPLETE ---");
+    }
+
+    private boolean isTestProfile() {
+        String[] activeProfiles = environment.getActiveProfiles();
+        for (String profile : activeProfiles) {
+            if ("test".equals(profile)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

@@ -3,6 +3,7 @@ package com.edwardjones.cre.integration;
 import com.edwardjones.cre.client.CrbtApiClient;
 import com.edwardjones.cre.model.dto.CrtChangeEvent;
 import com.edwardjones.cre.service.realtime.ChangeEventProcessor;
+import com.edwardjones.cre.service.realtime.ComplianceKafkaListener;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
@@ -10,6 +11,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.test.context.ActiveProfiles;
 
@@ -30,6 +32,10 @@ public class CrtDataStructureTest {
 
     @Autowired
     private ChangeEventProcessor changeEventProcessor;
+
+    // Updated to use the newer @MockitoBean annotation instead of deprecated @MockBean
+    @MockitoBean
+    private ComplianceKafkaListener mockKafkaListener;
 
     private final ObjectMapper objectMapper = new ObjectMapper()
             .registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule())

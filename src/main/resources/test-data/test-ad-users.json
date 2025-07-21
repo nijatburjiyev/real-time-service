@@ -15,7 +15,7 @@
       "CN=j050001,OU=Leaders,OU=Branch,OU=US,OU=People,DC=edj,DC=ad,DC=edwardjones,DC=com",
       "CN=p400001,OU=Associates,OU=Home Office,OU=CA,OU=People,DC=edj,DC=ad,DC=edwardjones,DC=com"
     ],
-    "Manager": "CN=j999999,OU=Executives,OU=Home Office,OU=US,OU=People,DC=edj,DC=ad,DC=edwardjones,DC=com",
+    "Manager": null,
     "Department": "Compliance",
     "Division": "Legal and Compliance",
     "State": "MO",
@@ -167,4 +167,3 @@
     "ej-IRNumber": null
   }
 ]
-

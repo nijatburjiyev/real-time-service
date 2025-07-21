@@ -1,6 +1,6 @@
 package com.edwardjones.cre.controller;
 
-import com.edwardjones.cre.business.ComplianceLogicService;
+import com.edwardjones.cre.service.logic.ComplianceLogicService;
 import com.edwardjones.cre.client.VendorApiClient;
 import com.edwardjones.cre.model.domain.AppUser;
 import com.edwardjones.cre.repository.AppUserRepository;
@@ -17,7 +17,7 @@ import java.util.Map;
 
 /**
  * Test controller for manually triggering mock scenarios and monitoring the application.
- * This is only for development/testing purposes.
+ * Updated to use the new service/logic package structure.
  */
 @Slf4j
 @RestController

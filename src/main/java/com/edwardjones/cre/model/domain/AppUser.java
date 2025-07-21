@@ -2,7 +2,7 @@ package com.edwardjones.cre.model.domain;
 
 import jakarta.persistence.*;
 import lombok.Data;
-import java.util.List;
+import java.util.HashSet;
 import java.util.Set;
 
 @Data
@@ -10,23 +10,39 @@ import java.util.Set;
 public class AppUser {
     @Id
     private String username;
+
+    @Column(unique = true) // Add unique constraint for performance and integrity
     private String employeeId;
+
     private String firstName;
     private String lastName;
     private String title;
+
     @Column(length = 1024)
     private String distinguishedName;
-    private String managerUsername;
-    private String country; // Added country field
+
+    private String country;
     private boolean isActive = true;
 
-    // Relationship to team memberships
-    @OneToMany(mappedBy = "user", fetch = FetchType.LAZY)
-    private List<UserTeamMembership> teamMemberships;
+    // --- The Recommended Hybrid Manager Relationship ---
+    @Column(name = "manager_username")
+    private String managerUsername;
 
-    // This is a derived/calculated field, not directly mapped to a column
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "manager_username", referencedColumnName = "username", insertable = false, updatable = false)
+    private AppUser manager;
+
+    @OneToMany(mappedBy = "manager", fetch = FetchType.LAZY)
+    private Set<AppUser> directReports = new HashSet<>();
+
+    // Relationship to team memberships - using Set to avoid duplicates
+    @OneToMany(mappedBy = "user", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
+    private Set<UserTeamMembership> teamMemberships = new HashSet<>();
+
+    // Calculated fields for business logic results (not persisted)
     @Transient
     private String calculatedVisibilityProfile;
+
     @Transient
     private Set<String> calculatedGroups;
 }

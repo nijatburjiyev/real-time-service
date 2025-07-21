@@ -116,7 +116,7 @@ public class AdLdapClient {
         vpCompliance.setTitle("Vice President - Compliance");
         vpCompliance.setDistinguishedName("CN=p100001,OU=Managers,OU=Home Office,OU=US,OU=People,DC=edj,DC=ad,DC=edwardjones,DC=com");
         vpCompliance.setCountry("US");
-        vpCompliance.setManagerUsername("j999999"); // Executive level
+        vpCompliance.setManagerUsername(null); // Executive level
         vpCompliance.setActive(true);
         mockUsers.add(vpCompliance);
 

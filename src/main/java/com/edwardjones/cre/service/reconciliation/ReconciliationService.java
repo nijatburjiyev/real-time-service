@@ -1,6 +1,6 @@
 package com.edwardjones.cre.service.reconciliation;
 
-import com.edwardjones.cre.business.ComplianceLogicService;
+import com.edwardjones.cre.service.logic.ComplianceLogicService;
 import com.edwardjones.cre.client.VendorApiClient;
 import com.edwardjones.cre.model.domain.AppUser;
 import com.edwardjones.cre.repository.AppUserRepository;
@@ -12,6 +12,13 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.HashSet;
+import java.util.List;
+
+/**
+ * Handles nightly reconciliation to correct configuration drift.
+ * Now delegates all business logic to ComplianceLogicService.
+ */
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -26,42 +33,30 @@ public class ReconciliationService {
     @Scheduled(cron = "${app.reconciliation.cron}")
     @Transactional
     public void runDailyTrueUp() {
-        log.info("--- RUNNING NIGHTLY RECONCILIATION ---");
+        log.info("🌙 === STARTING NIGHTLY RECONCILIATION ===");
 
         try {
-            // 1. Fetch current state from Vendor
+            // 1. Fetch current state from Vendor (for future drift detection)
             var actualUsers = vendorApiClient.getAllUsers();
             var actualGroups = vendorApiClient.getAllGroups();
             var actualVisibilityProfiles = vendorApiClient.getAllVisibilityProfiles();
 
-            // 2. Fetch desired state from H2 and calculate what it should be
-            var desiredUsers = appUserRepository.findAll();
+            log.info("📊 Vendor state: {} users, {} groups, {} VPs",
+                    actualUsers.size(), actualGroups.size(), actualVisibilityProfiles.size());
 
-            // 3. Compare and correct drift
-            reconcileUsers(desiredUsers);
+            // 2. Get all users from our state database
+            List<AppUser> allUsers = appUserRepository.findAll();
+            log.info("📋 Processing {} users from state database", allUsers.size());
 
-            log.info("--- RECONCILIATION COMPLETE ---");
+            // 3. Delegate bulk processing to ComplianceLogicService
+            complianceLogicService.recalculateAndPushUpdates(new HashSet<>(allUsers));
+
+            log.info("✅ === NIGHTLY RECONCILIATION COMPLETE ===");
 
         } catch (Exception e) {
-            log.error("Error during nightly reconciliation: ", e);
+            log.error("❌ Error during nightly reconciliation: ", e);
             // TODO: Send alert/notification about reconciliation failure
-        }
-    }
-
-    private void reconcileUsers(Iterable<AppUser> desiredUsers) {
-        for (AppUser user : desiredUsers) {
-            try {
-                // Calculate what the user's configuration should be
-                AppUser calculatedConfig = complianceLogicService.calculateConfigurationForUser(user);
-
-                // TODO: Compare with actual vendor state and push corrections
-                // For now, just push the calculated configuration
-                vendorApiClient.updateUser(calculatedConfig);
-
-            } catch (Exception e) {
-                log.error("Error reconciling user {}: ", user.getUsername(), e);
-                // Continue with other users even if one fails
-            }
+            throw e; // Re-throw to ensure the failure is recorded
         }
     }
 }

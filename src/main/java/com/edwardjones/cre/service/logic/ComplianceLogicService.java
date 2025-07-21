@@ -1,11 +1,13 @@
-package com.edwardjones.cre.business;
+package com.edwardjones.cre.service.logic;
 
+import com.edwardjones.cre.client.VendorApiClient;
 import com.edwardjones.cre.model.domain.AppUser;
 import com.edwardjones.cre.model.domain.CrbtTeam;
 import com.edwardjones.cre.model.domain.UserTeamMembership;
 import com.edwardjones.cre.repository.AppUserRepository;
 import com.edwardjones.cre.repository.UserTeamMembershipRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
@@ -13,18 +15,23 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
- * The core business logic engine of the compliance synchronization service.
- * This class is responsible for translating the complex rules from the original
- * PowerShell scripts into Java. It reads the current state from the database
- * repositories and calculates the "desired" configuration (Groups and Visibility Profile)
- * for a given user.
+ * The central brain of the compliance synchronization service.
+ * This is the single source of truth for all business logic and the primary
+ * orchestrator for configuration calculations and vendor updates.
+ *
+ * Responsibilities:
+ * 1. Calculate desired configurations for users based on business rules
+ * 2. Orchestrate bulk recalculation and updates
+ * 3. Serve as the single point of integration with the vendor API
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class ComplianceLogicService {
 
     private final AppUserRepository appUserRepository;
     private final UserTeamMembershipRepository userTeamMembershipRepository;
+    private final VendorApiClient vendorApiClient;
 
     // Translation of PowerShell's $submitterGroups hashtable
     private static final Map<String, String> SUBMITTER_GROUPS = Map.of(
@@ -40,25 +47,77 @@ public class ComplianceLogicService {
     }
 
     /**
-     * Main public method to calculate the complete desired configuration for a user.
-     * This orchestrates all the private business rule methods.
+     * PRIMARY PUBLIC API - Called by event processors and reconciliation services.
+     * This is the main entry point for triggering configuration updates.
      *
-     * @param username The PJNumber of the user to process.
-     * @return An AppUser object with the transient fields 'calculatedGroups' and
-     *         'calculatedVisibilityProfile' populated with the correct values.
+     * @param users Set of users whose configurations need to be recalculated and pushed
+     */
+    public void recalculateAndPushUpdates(Set<AppUser> users) {
+        log.info("=== COMPLIANCE LOGIC SERVICE: Processing {} users ===", users.size());
+
+        int updateCount = 0;
+        int errorCount = 0;
+
+        for (AppUser user : users) {
+            try {
+                // 1. Calculate the desired configuration
+                AppUser calculatedUser = calculateConfigurationForUser(user);
+
+                // 2. Push to vendor
+                vendorApiClient.updateUser(calculatedUser);
+                updateCount++;
+
+                log.debug("✅ Successfully processed user: {}", user.getUsername());
+
+            } catch (Exception e) {
+                errorCount++;
+                log.error("❌ Error processing user {}: {}", user.getUsername(), e.getMessage(), e);
+                // Continue with other users even if one fails
+            }
+        }
+
+        log.info("=== PROCESSING COMPLETE: {} successful, {} errors ===", updateCount, errorCount);
+    }
+
+    /**
+     * Convenience method for single user updates.
+     * Wraps the main API for single-user scenarios.
+     */
+    public void recalculateAndPushUpdate(AppUser user) {
+        recalculateAndPushUpdates(Set.of(user));
+    }
+
+    /**
+     * Calculate configuration for a user by username (for external callers like TestController).
+     * This method fetches the user from the database and calculates their configuration.
      */
     public AppUser calculateConfigurationForUser(String username) {
         AppUser user = appUserRepository.findById(username)
                 .orElseThrow(() -> new IllegalArgumentException("User not found in state DB: " + username));
+        return calculateConfigurationForUser(user);
+    }
+
+    /**
+     * Main configuration calculation method.
+     * This orchestrates all the private business rule methods.
+     *
+     * @param user The user entity to process
+     * @return An AppUser object with calculated fields populated
+     */
+    public AppUser calculateConfigurationForUser(AppUser user) {
+        log.debug("Calculating configuration for user: {} ({})", user.getUsername(), user.getTitle());
 
         // Determine the user's classification
         UserType userType = determineUserType(user);
+        log.debug("User {} classified as: {}", user.getUsername(), userType);
 
         CalculatedConfiguration finalConfig;
 
         // Special logic for users in multiple FA teams (VTM/HTM/SFA) takes precedence
-        if (user.getTeamMemberships() != null && user.getTeamMemberships().size() > 1) {
-            finalConfig = generateConfigurationFromMultipleGroups(user);
+        List<UserTeamMembership> memberships = userTeamMembershipRepository.findByUserUsername(user.getUsername());
+        if (memberships != null && memberships.size() > 1) {
+            log.debug("User {} has multiple team memberships, applying precedence logic", user.getUsername());
+            finalConfig = generateConfigurationFromMultipleGroups(user, memberships);
         } else {
             // Standard logic based on user type (HO, BR, Leader, etc.)
             finalConfig = generateConfigurationForUserType(user, userType);
@@ -68,17 +127,14 @@ public class ComplianceLogicService {
         user.setCalculatedGroups(finalConfig.groups());
         user.setCalculatedVisibilityProfile(finalConfig.visibilityProfileName());
 
+        log.debug("Final configuration for {}: VP={}, Groups={}",
+                 user.getUsername(), finalConfig.visibilityProfileName(), finalConfig.groups());
+
         return user;
     }
 
     /**
-     * Overloaded method that accepts an AppUser directly (for backward compatibility)
-     */
-    public AppUser calculateConfigurationForUser(AppUser user) {
-        return calculateConfigurationForUser(user.getUsername());
-    }
-
-    /**
+     * Determines the user classification based on their AD attributes.
      * Corresponds to the PowerShell function: get-userType
      */
     private UserType determineUserType(AppUser user) {
@@ -102,11 +158,10 @@ public class ComplianceLogicService {
     }
 
     /**
+     * Main dispatcher for calculating configuration based on user type.
      * Corresponds to the PowerShell function: get-visibilityProfile
-     * This is the main dispatcher for calculating configuration.
      */
     private CalculatedConfiguration generateConfigurationForUserType(AppUser user, UserType userType) {
-        // Use a switch expression for cleaner code
         return switch (userType) {
             case HO -> generateStandardProfile(user.getCountry(), "HO", "Home Office Regular User");
             case BR -> generateStandardProfile(user.getCountry(), "BR", "Branch Regular User - No Leader");
@@ -123,7 +178,6 @@ public class ComplianceLogicService {
         String profileKey = country + "-" + type;
         String vpName = "Vis-" + profileKey;
 
-        // A standard user belongs to the base submitter group for their type
         Set<String> groups = new HashSet<>();
         if(SUBMITTER_GROUPS.containsKey(profileKey)){
              groups.add(SUBMITTER_GROUPS.get(profileKey));
@@ -136,6 +190,7 @@ public class ComplianceLogicService {
     }
 
     /**
+     * Handles leader profile generation.
      * Corresponds to the PowerShell logic in: config-Leader and set-BranchGroupsVisProfile
      */
     private CalculatedConfiguration generateLeaderProfile(AppUser leader, UserType userType) {
@@ -162,19 +217,17 @@ public class ComplianceLogicService {
 
              List<UserTeamMembership> memberships = userTeamMembershipRepository.findByUserUsername(leader.getUsername());
              if(!memberships.isEmpty()){
-                 // Mimic set-BranchGroupsVisProfile logic
-                 String baseGroupName = String.format("%s-%s", leader.getCountry(), "State-Placeholder"); // Simplified
+                 String baseGroupName = String.format("%s-%s", leader.getCountry(), "State-Placeholder");
 
                  finalGroupNames = memberships.stream()
                      .map(m -> String.format("%s-%s-%s-%s",
                          baseGroupName,
                          m.getTeam().getTeamName(),
-                         "FA-No-Placeholder", // FA No not in our state model, can be added if needed
+                         "FA-No-Placeholder",
                          m.getTeam().getTeamType()
                      ).replace(" ", "_").replace(".", ""))
                      .collect(Collectors.toSet());
 
-                 // VP name is derived from the generated group names (using the last one for simplicity)
                  finalVpName = "Vis_" + finalGroupNames.stream().reduce((first, second) -> second).orElse("");
              }
 
@@ -186,15 +239,14 @@ public class ComplianceLogicService {
     }
 
     /**
+     * Handles the complex case of a user in multiple teams (VTM > HTM > SFA precedence).
      * Corresponds to the PowerShell function: get-visibilityProfileFromGroups
-     * This handles the complex case of a user (often a BOA) in multiple teams.
      */
-    private CalculatedConfiguration generateConfigurationFromMultipleGroups(AppUser user) {
-        // This is a direct translation of the VTM > HTM > SFA precedence logic
+    private CalculatedConfiguration generateConfigurationFromMultipleGroups(AppUser user, List<UserTeamMembership> memberships) {
+        log.debug("Processing multiple team memberships for user: {}", user.getUsername());
+
         Map<String, CrbtTeam> finalTeams = new HashMap<>(); // CRBT ID -> Team
         Set<String> fasCovered = new HashSet<>();
-
-        List<UserTeamMembership> memberships = userTeamMembershipRepository.findByUserUsername(user.getUsername());
 
         // Process VTM teams first to establish baseline coverage
         memberships.stream()
@@ -212,7 +264,6 @@ public class ComplianceLogicService {
              memberships.stream()
                 .filter(m -> teamType.equals(m.getTeam().getTeamType()))
                 .forEach(membership -> {
-                    // Check if this team covers anyone not already covered by a higher-tier team
                     boolean coversNewFa = userTeamMembershipRepository.findByTeamCrbtId(membership.getTeam().getCrbtId()).stream()
                             .anyMatch(member -> !fasCovered.contains(member.getUser().getUsername()));
 
@@ -252,8 +303,7 @@ public class ComplianceLogicService {
     }
 
     /**
-     * A simple record to hold the results of a calculation, ensuring the
-     * visibility profile name and the set of associated groups are always returned together.
+     * Configuration result record - ensures VP name and groups are always returned together.
      */
     private record CalculatedConfiguration(String visibilityProfileName, Set<String> groups) {}
 }
