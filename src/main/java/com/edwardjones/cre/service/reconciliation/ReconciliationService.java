@@ -52,7 +52,7 @@ public class ReconciliationService {
         for (AppUser user : desiredUsers) {
             try {
                 // Calculate what the user's configuration should be
-                AppUser calculatedConfig = complianceLogicService.calculateConfigurationForUser(user);
+                AppUser calculatedConfig = complianceLogicService.calculateConfigurationForUser(user.getUsername());
 
                 // TODO: Compare with actual vendor state and push corrections
                 // For now, just push the calculated configuration

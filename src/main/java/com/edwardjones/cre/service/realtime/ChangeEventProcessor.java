@@ -224,11 +224,29 @@ public class ChangeEventProcessor {
     }
 
     /**
-     * Helper method to compare two user configurations to detect changes.
+     * Helper method to compare user configurations for changes
+     * Uses optimized comparison that only calculates what's needed
      */
     private boolean configurationChanged(AppUser oldConfig, AppUser newConfig) {
-        return !Objects.equals(oldConfig.getCalculatedGroups(), newConfig.getCalculatedGroups()) ||
-               !Objects.equals(oldConfig.getCalculatedVisibilityProfile(), newConfig.getCalculatedVisibilityProfile());
+        if (oldConfig == null || newConfig == null) {
+            return true; // If either is null, consider it changed
+        }
+
+        // First check basic database fields (fast comparison)
+        boolean basicFieldsChanged = !Objects.equals(oldConfig.getTitle(), newConfig.getTitle()) ||
+               !Objects.equals(oldConfig.getManagerUsername(), newConfig.getManagerUsername()) ||
+               !Objects.equals(oldConfig.getDistinguishedName(), newConfig.getDistinguishedName()) ||
+               !Objects.equals(oldConfig.getCountry(), newConfig.getCountry()) ||
+               oldConfig.isActive() != newConfig.isActive();
+
+        if (basicFieldsChanged) {
+            return true; // No need to check calculated fields if basic fields changed
+        }
+
+        // Only check calculated fields if basic fields are the same
+        // This optimizes performance by avoiding expensive calculations when not needed
+        return !Objects.equals(oldConfig.getCalculatedVisibilityProfile(), newConfig.getCalculatedVisibilityProfile()) ||
+               !Objects.equals(oldConfig.getCalculatedGroups(), newConfig.getCalculatedGroups());
     }
 
     /**
@@ -395,4 +413,3 @@ public class ChangeEventProcessor {
         });
     }
 }
-
