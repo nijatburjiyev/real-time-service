@@ -1,9 +1,12 @@
 spring:
   application:
     name: compliance-sync-service-test
-  # Test Database Configuration - In-memory H2 database
+  # Test Database Configuration - File-based H2 database for easier inspection
   datasource:
-    url: jdbc:h2:mem:test_compliance_state_db;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    # Store in build directory - gets cleaned automatically and ignored by Git
+    # Removed DB_CLOSE_DELAY and DB_CLOSE_ON_EXIT (incompatible with file mode)
+    # Added MODE=LEGACY for Hibernate compatibility
+    url: jdbc:h2:file:./build/data/test_compliance_state_db;AUTO_SERVER=TRUE;MODE=LEGACY
     driverClassName: org.h2.Driver
     username: sa
     password:
@@ -12,6 +15,11 @@ spring:
     hibernate:
       ddl-auto: create-drop # Creates schema on startup, drops on shutdown
     show-sql: false # Reduce test noise
+  # Enable H2 Console for development/testing
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
   # Kafka Configuration - Disabled for tests since we use @MockitoBean
   kafka:
     bootstrap-servers: embedded # Use embedded for tests to avoid connection attempts

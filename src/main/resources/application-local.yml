@@ -1,0 +1,45 @@
+# 'local' profile for interactive testing with TestController
+spring:
+  application:
+    name: compliance-sync-service-local
+  # Use a file-based H2 database so we can inspect it
+  datasource:
+    url: jdbc:h2:file:./build/data/local_compliance_db;AUTO_SERVER=TRUE;MODE=LEGACY
+    driverClassName: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    database-platform: org.hibernate.dialect.H2Dialect
+    hibernate:
+      ddl-auto: update # 'update' will preserve data between application restarts
+    show-sql: true
+  # Enable H2 Console for development/testing
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+  # Disable Kafka for local testing - use TestController endpoints instead
+  kafka:
+    enabled: false
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.kafka.KafkaAutoConfiguration
+
+# Custom Application Properties for Local Testing
+app:
+  kafka:
+    topics:
+      ad-changes: ad-user-changes-local-topic
+      crt-changes: crt-team-changes-local-topic
+      dlt: compliance-sync-local.dlt
+  reconciliation:
+    cron: "0 */30 * * * *" # Run every 30 minutes for local testing
+
+# Detailed logging for local development
+logging:
+  level:
+    com.edwardjones.cre: DEBUG
+    org.springframework.kafka: INFO
+    org.apache.kafka: WARN
+    org.springframework.web: DEBUG
+    org.springframework.transaction: DEBUG

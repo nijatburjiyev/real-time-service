@@ -22,8 +22,8 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.*;
+import static org.mockito.ArgumentMatchers.any;
 
 /**
  * Comprehensive integration test that validates the complete compliance sync workflow.
@@ -192,16 +192,18 @@ public class UnifiedComplianceIntegrationTest {
         // WHEN: They are deactivated via AD event
         AdChangeEvent event = new AdChangeEvent();
         event.setPjNumber(username);
-        event.setChangeType("DataChange");
-        event.setProperty("Enabled");
+        event.setChangeType(AdChangeEvent.CHANGE_TYPE_DATA_CHANGE);
+        event.setProperty(AdChangeEvent.PROPERTY_ENABLED);
         event.setNewValue("false");
 
         changeEventProcessor.processAdChange(event);
 
-        // THEN: The event should be processed gracefully (system correctly identifies this as non-impactful)
-        // Verify the user is still in database (deactivation is handled differently in this system)
+        // THEN: The user is marked inactive but NO vendor call is made
+        verify(mockVendorApiClient, never()).updateUser(any(AppUser.class));
+
         AppUser userAfter = appUserRepository.findById(username).orElseThrow();
         assertNotNull(userAfter, "User should still exist in database");
+        assertFalse(userAfter.isActive(), "User should be marked as inactive");
 
         // Note: This system treats "Enabled" changes as non-impactful, which is correct behavior
         // No vendor API call is expected for this type of change

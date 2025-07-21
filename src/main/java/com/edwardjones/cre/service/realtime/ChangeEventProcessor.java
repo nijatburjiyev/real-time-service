@@ -301,44 +301,56 @@ public class ChangeEventProcessor {
     // ==================== UTILITY METHODS ====================
 
     /**
-     * Apply AD changes to user entity. Returns true if the change could impact direct reports.
+     * Apply the AD change to the user's local state.
+     * @return true if this change could impact the user's calculated configuration
      */
     private boolean applyAdChangeToUser(AppUser user, AdChangeEvent event) {
-        switch (event.getProperty().toLowerCase()) {
-            case "manager":
-            case "managerusername":
-                // Handle both DN format and direct username format
-                String newManagerUsername = event.getNewValue();
-                if (newManagerUsername != null && newManagerUsername.startsWith("CN=")) {
-                    newManagerUsername = parsePjFromDn(newManagerUsername);
-                }
-                user.setManagerUsername(newManagerUsername);
-                return true; // Manager changes should trigger recalculation and vendor updates
-            case "title":
-                user.setTitle(event.getNewValue());
-                return true; // A leader's title change can affect group names
-            case "distinguishedname":
-                user.setDistinguishedName(event.getNewValue());
-                return true; // A leader's OU change could affect configurations
-            case "enabled":
-                user.setActive("true".equalsIgnoreCase(event.getNewValue()));
-                return false;
-            case "ej-irnumber":
-                user.setEmployeeId(event.getNewValue());
-                return false;
-            case "state":
-                user.setCountry(event.getNewValue());
-                return true; // Location changes could affect compliance groups
-            case "name":
-                log.info("📛 Name change detected for user {}: {} -> {}",
-                        user.getUsername(), event.getBeforeValue(), event.getNewValue());
-                return false;
-            case "teamrole":
-                // Handle team role changes - this is an impactful change
-                return true;
-            default:
-                log.warn("⚠️ Unhandled AD property change for user {}: {}", user.getUsername(), event.getProperty());
-                return false;
+        log.debug("📝 Applying AD change to user {}: {} = {}", user.getUsername(), event.getProperty(), event.getNewValue());
+
+        String propertyLower = event.getProperty().toLowerCase();
+
+        if (AdChangeEvent.PROPERTY_MANAGER.toLowerCase().equals(propertyLower) ||
+            AdChangeEvent.PROPERTY_MANAGER_USERNAME.toLowerCase().equals(propertyLower)) {
+            // Handle both DN format and direct username format
+            String newManagerUsername = event.getNewValue();
+            if (newManagerUsername != null && newManagerUsername.startsWith("CN=")) {
+                newManagerUsername = parsePjFromDn(newManagerUsername);
+            }
+            user.setManagerUsername(newManagerUsername);
+            return true; // Manager changes should trigger recalculation and vendor updates
+
+        } else if (AdChangeEvent.PROPERTY_TITLE.toLowerCase().equals(propertyLower)) {
+            user.setTitle(event.getNewValue());
+            return true; // A leader's title change can affect group names
+
+        } else if (AdChangeEvent.PROPERTY_DISTINGUISHED_NAME.toLowerCase().equals(propertyLower)) {
+            user.setDistinguishedName(event.getNewValue());
+            return true; // A leader's OU change could affect configurations
+
+        } else if (AdChangeEvent.PROPERTY_ENABLED.toLowerCase().equals(propertyLower)) {
+            user.setActive("true".equalsIgnoreCase(event.getNewValue()));
+            return false;
+
+        } else if (AdChangeEvent.PROPERTY_EJ_IR_NUMBER.toLowerCase().equals(propertyLower)) {
+            user.setEmployeeId(event.getNewValue());
+            return false;
+
+        } else if (AdChangeEvent.PROPERTY_STATE.toLowerCase().equals(propertyLower)) {
+            user.setCountry(event.getNewValue());
+            return true; // Location changes could affect compliance groups
+
+        } else if (AdChangeEvent.PROPERTY_NAME.toLowerCase().equals(propertyLower)) {
+            log.info("📛 Name change detected for user {}: {} -> {}",
+                    user.getUsername(), event.getBeforeValue(), event.getNewValue());
+            return false;
+
+        } else if (AdChangeEvent.PROPERTY_TEAM_ROLE.toLowerCase().equals(propertyLower)) {
+            // Handle team role changes - this is an impactful change
+            return true;
+
+        } else {
+            log.warn("⚠️ Unhandled AD property change for user {}: {}", user.getUsername(), event.getProperty());
+            return false;
         }
     }
 

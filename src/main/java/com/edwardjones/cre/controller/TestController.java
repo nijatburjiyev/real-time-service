@@ -1,208 +1,207 @@
 package com.edwardjones.cre.controller;
 
-import com.edwardjones.cre.service.logic.ComplianceLogicService;
-import com.edwardjones.cre.client.VendorApiClient;
+import com.edwardjones.cre.client.AdLdapClient;
+import com.edwardjones.cre.client.CrbtApiClient;
 import com.edwardjones.cre.model.domain.AppUser;
+import com.edwardjones.cre.model.domain.CrbtTeam;
+import com.edwardjones.cre.model.dto.AdChangeEvent;
+import com.edwardjones.cre.model.dto.CrtChangeEvent;
 import com.edwardjones.cre.repository.AppUserRepository;
-import com.edwardjones.cre.service.mock.MockKafkaEventSimulator;
-import com.edwardjones.cre.service.reconciliation.ReconciliationService;
+import com.edwardjones.cre.repository.CrbtTeamRepository;
+import com.edwardjones.cre.service.realtime.ChangeEventProcessor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 
 /**
- * Test controller for manually triggering mock scenarios and monitoring the application.
- * Updated to use the new service/logic package structure.
+ * Test controller for manually triggering mock scenarios and loading data.
+ * This controller is only active when the application is run with the 'local' profile.
  */
 @Slf4j
 @RestController
 @RequestMapping("/api/test")
-@Profile("!test")
+@Profile("local")
 public class TestController {
 
-    private final Optional<MockKafkaEventSimulator> mockKafkaEventSimulator;
-    private final ComplianceLogicService complianceLogicService;
-    private final VendorApiClient vendorApiClient;
+    private final ChangeEventProcessor changeEventProcessor;
+    private final AdLdapClient adLdapClient;
+    private final CrbtApiClient crbtApiClient;
     private final AppUserRepository appUserRepository;
-    private final ReconciliationService reconciliationService;
+    private final CrbtTeamRepository crbtTeamRepository;
 
     @Autowired
-    public TestController(Optional<MockKafkaEventSimulator> mockKafkaEventSimulator,
-                          ComplianceLogicService complianceLogicService,
-                          VendorApiClient vendorApiClient,
+    public TestController(ChangeEventProcessor changeEventProcessor,
+                          AdLdapClient adLdapClient,
+                          CrbtApiClient crbtApiClient,
                           AppUserRepository appUserRepository,
-                          ReconciliationService reconciliationService) {
-        this.mockKafkaEventSimulator = mockKafkaEventSimulator;
-        this.complianceLogicService = complianceLogicService;
-        this.vendorApiClient = vendorApiClient;
+                          CrbtTeamRepository crbtTeamRepository) {
+        this.changeEventProcessor = changeEventProcessor;
+        this.adLdapClient = adLdapClient;
+        this.crbtApiClient = crbtApiClient;
         this.appUserRepository = appUserRepository;
-        this.reconciliationService = reconciliationService;
+        this.crbtTeamRepository = crbtTeamRepository;
     }
 
     /**
-     * Trigger mock Kafka events to test real-time processing
+     * Simulates receiving an AD Change event from Kafka.
+     * The request body should be a JSON object matching the AdChangeEvent DTO.
      */
-    @PostMapping("/trigger-events/{scenario}")
-    public ResponseEntity<Map<String, Object>> triggerEvents(@PathVariable String scenario) {
-        log.info("Manual trigger requested for scenario: {}", scenario);
-
+    @PostMapping("/simulate/ad-change")
+    @Transactional
+    public ResponseEntity<Map<String, Object>> simulateAdChangeEvent(@RequestBody AdChangeEvent event) {
+        log.info("▶️ Manual Trigger: Simulating AD Change Event for user '{}'", event.getPjNumber());
         Map<String, Object> response = new HashMap<>();
-        response.put("scenario", scenario);
-        response.put("timestamp", System.currentTimeMillis());
-
         try {
-            mockKafkaEventSimulator.get().triggerSpecificScenario(scenario);
+            changeEventProcessor.processAdChange(event);
             response.put("status", "success");
-            response.put("message", "Events triggered successfully");
+            response.put("message", "AD Change Event processed successfully for user: " + event.getPjNumber());
+            appUserRepository.findById(event.getPjNumber()).ifPresent(user -> response.put("updatedUser", user));
+            return ResponseEntity.ok(response);
         } catch (Exception e) {
-            log.error("Error triggering scenario: {}", scenario, e);
+            log.error("Error processing simulated AD event", e);
             response.put("status", "error");
             response.put("message", e.getMessage());
+            return ResponseEntity.internalServerError().body(response);
         }
-
-        return ResponseEntity.ok(response);
     }
 
     /**
-     * Test the compliance logic for a specific user
+     * Simulates receiving a CRT Change event from Kafka.
+     * The request body should be a JSON object matching the CrtChangeEvent DTO.
      */
-    @GetMapping("/calculate-config/{username}")
-    public ResponseEntity<Map<String, Object>> calculateUserConfig(@PathVariable String username) {
-        log.info("Manual calculation requested for user: {}", username);
-
+    @PostMapping("/simulate/crt-change")
+    @Transactional
+    public ResponseEntity<Map<String, Object>> simulateCrtChangeEvent(@RequestBody CrtChangeEvent event) {
+        log.info("▶️ Manual Trigger: Simulating CRT Change Event for team '{}'", event.getCrbtId());
         Map<String, Object> response = new HashMap<>();
-        response.put("username", username);
-
         try {
-            AppUser calculatedUser = complianceLogicService.calculateConfigurationForUser(username);
-
-            Map<String, Object> config = new HashMap<>();
-            config.put("username", calculatedUser.getUsername());
-            config.put("firstName", calculatedUser.getFirstName());
-            config.put("lastName", calculatedUser.getLastName());
-            config.put("title", calculatedUser.getTitle());
-            config.put("country", calculatedUser.getCountry());
-            config.put("managerUsername", calculatedUser.getManagerUsername());
-            config.put("calculatedVisibilityProfile", calculatedUser.getCalculatedVisibilityProfile());
-            config.put("calculatedGroups", calculatedUser.getCalculatedGroups());
-
+            changeEventProcessor.processCrtChange(event);
             response.put("status", "success");
-            response.put("configuration", config);
-
+            response.put("message", "CRT Change Event processed successfully for team: " + event.getCrbtId());
+            return ResponseEntity.ok(response);
         } catch (Exception e) {
-            log.error("Error calculating config for user: {}", username, e);
+            log.error("Error processing simulated CRT event", e);
             response.put("status", "error");
             response.put("message", e.getMessage());
+            return ResponseEntity.internalServerError().body(response);
         }
-
-        return ResponseEntity.ok(response);
     }
 
     /**
-     * Get all users and their current calculated configurations
+     * Loads all users from the AD client (uses existing JSON data).
+     * This simulates a bulk data load from Active Directory.
      */
-    @GetMapping("/users/all-configs")
-    public ResponseEntity<Map<String, Object>> getAllUserConfigs() {
-        log.info("Retrieving all user configurations");
-
+    @PostMapping("/load/all-ad-users")
+    @Transactional
+    public ResponseEntity<Map<String, Object>> loadAllAdUsers() {
+        log.info("▶️ Manual Trigger: Loading all users from AD client");
         Map<String, Object> response = new HashMap<>();
-
         try {
-            List<AppUser> allUsers = appUserRepository.findAll();
-            List<Map<String, Object>> userConfigs = allUsers.stream()
-                .map(user -> {
-                    AppUser calculatedUser = complianceLogicService.calculateConfigurationForUser(user.getUsername());
-
-                    Map<String, Object> config = new HashMap<>();
-                    config.put("username", calculatedUser.getUsername());
-                    config.put("name", calculatedUser.getFirstName() + " " + calculatedUser.getLastName());
-                    config.put("title", calculatedUser.getTitle());
-                    config.put("country", calculatedUser.getCountry());
-                    config.put("manager", calculatedUser.getManagerUsername());
-                    config.put("visibilityProfile", calculatedUser.getCalculatedVisibilityProfile());
-                    config.put("groups", calculatedUser.getCalculatedGroups());
-                    return config;
-                })
-                .toList();
-
+            List<AppUser> users = adLdapClient.fetchAllUsers();
+            appUserRepository.saveAll(users);
             response.put("status", "success");
-            response.put("totalUsers", userConfigs.size());
-            response.put("users", userConfigs);
-
+            response.put("message", "Loaded " + users.size() + " users from AD data");
+            response.put("userCount", users.size());
+            return ResponseEntity.ok(response);
         } catch (Exception e) {
-            log.error("Error retrieving user configurations", e);
+            log.error("Error loading AD users", e);
             response.put("status", "error");
             response.put("message", e.getMessage());
+            return ResponseEntity.internalServerError().body(response);
         }
-
-        return ResponseEntity.ok(response);
     }
 
     /**
-     * Trigger manual reconciliation to test the nightly process
+     * Manually creates a single user from provided JSON data.
      */
-    @PostMapping("/trigger-reconciliation")
-    public ResponseEntity<Map<String, Object>> triggerReconciliation() {
-        log.info("Manual reconciliation triggered");
-
+    @PostMapping("/load/single-user")
+    @Transactional
+    public ResponseEntity<Map<String, Object>> loadSingleUser(@RequestBody AppUser user) {
+        log.info("▶️ Manual Trigger: Loading single user '{}'", user.getUsername());
         Map<String, Object> response = new HashMap<>();
-        response.put("timestamp", System.currentTimeMillis());
-
         try {
-            reconciliationService.runDailyTrueUp();
+            AppUser savedUser = appUserRepository.save(user);
             response.put("status", "success");
-            response.put("message", "Reconciliation completed successfully");
+            response.put("message", "User " + savedUser.getUsername() + " loaded successfully");
+            response.put("loadedUser", savedUser);
+            return ResponseEntity.ok(response);
         } catch (Exception e) {
-            log.error("Error during manual reconciliation", e);
+            log.error("Error loading single user", e);
             response.put("status", "error");
             response.put("message", e.getMessage());
+            return ResponseEntity.internalServerError().body(response);
         }
-
-        return ResponseEntity.ok(response);
     }
 
     /**
-     * Get vendor API call statistics
+     * Loads all teams from the CRBT client (uses existing JSON data).
+     * This simulates a bulk data load from the CRBT API.
      */
-    @GetMapping("/vendor-api/stats")
-    public ResponseEntity<Map<String, Object>> getVendorApiStats() {
+    @PostMapping("/load/all-crbt-teams")
+    @Transactional
+    public ResponseEntity<Map<String, Object>> loadAllCrbtTeams() {
+        log.info("▶️ Manual Trigger: Loading all teams from CRBT client");
         Map<String, Object> response = new HashMap<>();
-        response.put("statistics", vendorApiClient.getCallStatistics());
-        response.put("timestamp", System.currentTimeMillis());
-        return ResponseEntity.ok(response);
+        try {
+            List<CrbtTeam> teams = crbtApiClient.fetchAllTeams();
+            crbtTeamRepository.saveAll(teams);
+            response.put("status", "success");
+            response.put("message", "Loaded " + teams.size() + " teams from CRBT data");
+            response.put("teamCount", teams.size());
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            log.error("Error loading CRBT teams", e);
+            response.put("status", "error");
+            response.put("message", e.getMessage());
+            return ResponseEntity.internalServerError().body(response);
+        }
     }
 
     /**
-     * Reset vendor API call counters
+     * Manually creates a single team from provided JSON data.
      */
-    @PostMapping("/vendor-api/reset-counters")
-    public ResponseEntity<Map<String, Object>> resetVendorApiCounters() {
-        vendorApiClient.resetCounters();
-
+    @PostMapping("/load/single-team")
+    @Transactional
+    public ResponseEntity<Map<String, Object>> loadSingleTeam(@RequestBody CrbtTeam team) {
+        log.info("▶️ Manual Trigger: Loading single team '{}'", team.getCrbtId());
         Map<String, Object> response = new HashMap<>();
-        response.put("status", "success");
-        response.put("message", "Vendor API counters reset");
-        response.put("timestamp", System.currentTimeMillis());
-
-        return ResponseEntity.ok(response);
+        try {
+            CrbtTeam savedTeam = crbtTeamRepository.save(team);
+            response.put("status", "success");
+            response.put("message", "Team " + savedTeam.getCrbtId() + " loaded successfully");
+            response.put("loadedTeam", savedTeam);
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            log.error("Error loading single team", e);
+            response.put("status", "error");
+            response.put("message", e.getMessage());
+            return ResponseEntity.internalServerError().body(response);
+        }
     }
 
     /**
-     * Health check endpoint
+     * Gets current database status for debugging.
      */
-    @GetMapping("/health")
-    public ResponseEntity<Map<String, Object>> healthCheck() {
-        Map<String, Object> response = new HashMap<>();
-        response.put("status", "healthy");
-        response.put("timestamp", System.currentTimeMillis());
-        response.put("totalUsers", appUserRepository.count());
-        return ResponseEntity.ok(response);
+    @GetMapping("/status")
+    public ResponseEntity<Map<String, Object>> getStatus() {
+        Map<String, Object> status = new HashMap<>();
+
+        long userCount = appUserRepository.count();
+        long teamCount = crbtTeamRepository.count();
+
+        status.put("userCount", userCount);
+        status.put("teamCount", teamCount);
+        status.put("status", "ready");
+        status.put("message", "TestController is active under 'local' profile");
+
+        log.info("📊 Status Check: {} users, {} teams in database", userCount, teamCount);
+        return ResponseEntity.ok(status);
     }
 }
