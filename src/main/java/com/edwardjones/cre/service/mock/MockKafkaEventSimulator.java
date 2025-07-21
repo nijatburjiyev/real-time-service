@@ -110,113 +110,115 @@ public class MockKafkaEventSimulator {
     public void simulateRealisticCrtEvents() {
         log.info("--- Simulating Realistic CRT Change Events (Exact Kafka Format) ---");
 
-        // Test 1: Kevin Florer (BOA) joins VTM team - exact format from your Kafka example
+        // Test 1: Kevin Florer (BOA) joins VTM team - using correct new DTO structure
         CrtChangeEvent teamMemberAddition = new CrtChangeEvent();
         teamMemberAddition.setCrbtId(312595);
         teamMemberAddition.setIrNumber(903422);
         teamMemberAddition.setBrNumber(29870);
         teamMemberAddition.setCrbtName("JOHN FRANK/ KEVIN FLORER");
-        teamMemberAddition.setEffectiveBeginDate(LocalDate.of(2025, 5, 12));
+        teamMemberAddition.setEffectiveBeginDate("2025-05-12"); // String format
         teamMemberAddition.setEffectiveEndDate(null); // Active team
         teamMemberAddition.setAdvisoryLetterType("A");
-        teamMemberAddition.setTeamType("VTM");
+        teamMemberAddition.setTeamType("ACM");
         teamMemberAddition.setDisplayNameType("L");
         teamMemberAddition.setAssistantSubTeamId(null);
 
         CrtChangeEvent.CrtMemberChange newMember = new CrtChangeEvent.CrtMemberChange();
         newMember.setEmployeeId("0104554"); // Kevin Florer
         newMember.setRole("BOA");
-        newMember.setRoleServicePriority(null);
-        newMember.setMemberEffectiveBeginDate(LocalDate.of(2025, 7, 19));
-        newMember.setMemberEffectiveEndDate(null); // Active membership
+        newMember.setRolePriority(null);
+        newMember.setEffectiveBeginDate("2025-07-19"); // String format
+        newMember.setEffectiveEndDate(null); // Active membership
         newMember.setEjcIndicator("N");
 
         teamMemberAddition.setMembers(newMember);
 
-        log.info("🔄 Simulating exact Kafka format: Employee {} joins team {} as {}",
+        log.info("🔄 Simulating CRT member addition: Employee {} joins team {} as {}",
                 newMember.getEmployeeId(), teamMemberAddition.getCrbtId(), newMember.getRole());
         changeEventProcessor.processCrtChange(teamMemberAddition);
 
-        // Test 2: Role change - David Chen becomes LEAD
+        // Test 2: Role change - Employee role change
         CrtChangeEvent roleChange = new CrtChangeEvent();
         roleChange.setCrbtId(312595);
         roleChange.setIrNumber(903422);
         roleChange.setBrNumber(29870);
         roleChange.setCrbtName("JOHN FRANK/ KEVIN FLORER");
-        roleChange.setEffectiveBeginDate(LocalDate.of(2025, 5, 12));
+        roleChange.setEffectiveBeginDate("2025-05-12"); // String format
         roleChange.setEffectiveEndDate(null);
         roleChange.setAdvisoryLetterType("A");
-        roleChange.setTeamType("ACM"); // Changed to ACM for testing
+        roleChange.setTeamType("ACM");
         roleChange.setDisplayNameType("L");
         roleChange.setAssistantSubTeamId(null);
 
         CrtChangeEvent.CrtMemberChange roleChangeMember = new CrtChangeEvent.CrtMemberChange();
-        roleChangeMember.setEmployeeId("0087654"); // David Chen
-        roleChangeMember.setRole("LEAD"); // Promoted to LEAD
-        roleChangeMember.setRoleServicePriority(null);
-        roleChangeMember.setMemberEffectiveBeginDate(LocalDate.of(2025, 7, 20));
-        roleChangeMember.setMemberEffectiveEndDate(null);
+        roleChangeMember.setEmployeeId("0198576"); // John Frank
+        roleChangeMember.setRole("LEAD"); // Role change from FA to LEAD
+        roleChangeMember.setRolePriority(null);
+        roleChangeMember.setEffectiveBeginDate("2025-07-20"); // String format
+        roleChangeMember.setEffectiveEndDate(null);
         roleChangeMember.setEjcIndicator("N");
 
         roleChange.setMembers(roleChangeMember);
 
-        log.info("🔄 Simulating role change: Employee {} -> {} in team {} (exact Kafka format)",
-                roleChangeMember.getEmployeeId(), roleChangeMember.getRole(), roleChange.getCrbtId());
+        log.info("🔄 Simulating CRT role change: Employee {} role changed to {}",
+                roleChangeMember.getEmployeeId(), roleChangeMember.getRole());
         changeEventProcessor.processCrtChange(roleChange);
 
-        // Test 3: Member leaves team - John Frank membership ends
+        // Test 3: Member leaving team
         CrtChangeEvent memberLeaving = new CrtChangeEvent();
         memberLeaving.setCrbtId(312595);
         memberLeaving.setIrNumber(903422);
         memberLeaving.setBrNumber(29870);
         memberLeaving.setCrbtName("JOHN FRANK/ KEVIN FLORER");
-        memberLeaving.setEffectiveBeginDate(LocalDate.of(2025, 5, 12));
+        memberLeaving.setEffectiveBeginDate("2025-05-12"); // String format
         memberLeaving.setEffectiveEndDate(null);
         memberLeaving.setAdvisoryLetterType("A");
-        memberLeaving.setTeamType("VTM");
+        memberLeaving.setTeamType("ACM");
         memberLeaving.setDisplayNameType("L");
         memberLeaving.setAssistantSubTeamId(null);
 
         CrtChangeEvent.CrtMemberChange leavingMember = new CrtChangeEvent.CrtMemberChange();
-        leavingMember.setEmployeeId("0104553"); // John Frank
-        leavingMember.setRole("FA");
-        leavingMember.setRoleServicePriority(null);
-        leavingMember.setMemberEffectiveBeginDate(LocalDate.of(2025, 5, 12));
-        leavingMember.setMemberEffectiveEndDate(LocalDate.of(2025, 7, 20)); // Membership ends
-        leavingMember.setEjcIndicator("Y"); // Leaving indicator
+        leavingMember.setEmployeeId("0179850"); // Kevin Florer
+        leavingMember.setRole("BOA");
+        leavingMember.setRolePriority(null);
+        leavingMember.setEffectiveBeginDate("2025-05-12"); // String format
+        leavingMember.setEffectiveEndDate("2025-07-20"); // Membership ends - String format
+        leavingMember.setEjcIndicator("N");
 
         memberLeaving.setMembers(leavingMember);
 
-        log.info("🔄 Simulating member leaving: Employee {} leaves team {} (ejcInd=Y, exact Kafka format)",
+        log.info("🔄 Simulating CRT member leaving: Employee {} leaving team {}",
                 leavingMember.getEmployeeId(), memberLeaving.getCrbtId());
         changeEventProcessor.processCrtChange(memberLeaving);
 
-        // Test 4: Team deactivation with exact Kafka format
+        // Test 4: Team deactivation
         CrtChangeEvent teamDeactivation = new CrtChangeEvent();
         teamDeactivation.setCrbtId(312595);
         teamDeactivation.setIrNumber(903422);
         teamDeactivation.setBrNumber(29870);
         teamDeactivation.setCrbtName("JOHN FRANK/ KEVIN FLORER");
-        teamDeactivation.setEffectiveBeginDate(LocalDate.of(2025, 5, 12));
-        teamDeactivation.setEffectiveEndDate(LocalDate.of(2025, 7, 20)); // Team ends
+        teamDeactivation.setEffectiveBeginDate("2025-05-12"); // String format
+        teamDeactivation.setEffectiveEndDate("2025-07-20"); // Team ends - String format
         teamDeactivation.setAdvisoryLetterType("A");
-        teamDeactivation.setTeamType("VTM");
+        teamDeactivation.setTeamType("ACM");
         teamDeactivation.setDisplayNameType("L");
         teamDeactivation.setAssistantSubTeamId(null);
 
         CrtChangeEvent.CrtMemberChange finalMember = new CrtChangeEvent.CrtMemberChange();
-        finalMember.setEmployeeId("0104554"); // Kevin Florer
-        finalMember.setRole("BOA");
-        finalMember.setRoleServicePriority(null);
-        finalMember.setMemberEffectiveBeginDate(LocalDate.of(2025, 5, 12));
-        finalMember.setMemberEffectiveEndDate(LocalDate.of(2025, 7, 20)); // Final membership ends
-        finalMember.setEjcIndicator("Y");
+        finalMember.setEmployeeId("0198576"); // Last remaining member
+        finalMember.setRole("FA");
+        finalMember.setRolePriority(null);
+        finalMember.setEffectiveBeginDate("2025-05-12"); // String format
+        finalMember.setEffectiveEndDate("2025-07-20"); // Final membership ends - String format
+        finalMember.setEjcIndicator("N");
 
         teamDeactivation.setMembers(finalMember);
 
-        log.info("🔄 Simulating team deactivation: Team {} deactivated (effEndDa set, exact Kafka format)",
+        log.info("🔄 Simulating CRT team deactivation: Team {} deactivated",
                 teamDeactivation.getCrbtId());
         changeEventProcessor.processCrtChange(teamDeactivation);
+
+        log.info("=== Realistic Mock Kafka Event Simulation Complete ===");
     }
 
     /**

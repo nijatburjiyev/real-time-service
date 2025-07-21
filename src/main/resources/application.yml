@@ -12,15 +12,14 @@ spring:
     hibernate:
       ddl-auto: update # Creates/updates the schema on startup
     show-sql: true
-  # Kafka Configuration
-  kafka:
-    bootstrap-servers: localhost:9092 # Change to your Kafka broker
-    consumer:
-      group-id: compliance-sync-group
-      auto-offset-reset: earliest
-    producer:
-      key-serializer: org.apache.kafka.common.serialization.StringSerializer
-      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+  # Disable Kafka auto-configuration for local testing
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.kafka.KafkaAutoConfiguration
+
+# Server Configuration
+server:
+  port: 8081
 
 # Custom Application Properties
 app:
@@ -31,3 +30,18 @@ app:
       dlt: compliance-sync.dlt # Dead Letter Topic
   reconciliation:
     cron: "0 0 2 * * ?" # 2 AM every day
+
+---
+# Production profile (when you actually want Kafka)
+spring:
+  config:
+    activate:
+      on-profile: prod
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: compliance-sync-group
+      auto-offset-reset: earliest
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer

@@ -1,0 +1,52 @@
+spring:
+  application:
+    name: compliance-sync-service-test
+  # Use different port to avoid conflicts
+  server:
+    port: 8081
+  # H2 Database Configuration for Tests - persistent for analysis
+  datasource:
+    url: jdbc:h2:file:./data/test_compliance_state_db;AUTO_SERVER=TRUE;DB_CLOSE_DELAY=-1
+    driverClassName: org.h2.Driver
+    username: sa
+    password: test
+  jpa:
+    database-platform: org.hibernate.dialect.H2Dialect
+    hibernate:
+      ddl-auto: create-drop # Recreate schema for each test run
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+      settings:
+        web-allow-others: true
+
+# Custom Application Properties for Tests
+app:
+  # Disable Kafka topics completely
+  kafka:
+    enabled: false
+    topics:
+      ad-changes: "test-ad-changes"
+      crt-changes: "test-crt-changes"
+      dlt: "test-dlt"
+  reconciliation:
+    cron: "-" # Disable scheduled reconciliation in tests
+
+# Logging configuration for better test analysis
+logging:
+  level:
+    root: WARN
+    com.edwardjones.cre: DEBUG
+    org.springframework.kafka: OFF  # Completely disable Kafka logging
+    org.apache.kafka: OFF          # Disable Apache Kafka logging
+    org.springframework.kafka.listener: OFF
+    org.springframework.kafka.config: OFF
+    org.hibernate.SQL: DEBUG
+    org.hibernate.type.descriptor.sql.BasicBinder: TRACE
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"

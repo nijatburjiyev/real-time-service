@@ -52,26 +52,39 @@ public class AdChangeEvent {
     }
 
     /**
-     * Checks if this is a new user creation event.
-     * @return true if the ChangeType is 'NewUser'
+     * Determines if this is a user lifecycle event (creation/termination)
+     */
+    public boolean isLifecycleEvent() {
+        return "NewUser".equalsIgnoreCase(changeType) ||
+               "TerminatedUser".equalsIgnoreCase(changeType);
+    }
+
+    /**
+     * Check if this is a new user event
      */
     public boolean isNewUser() {
         return "NewUser".equalsIgnoreCase(changeType);
     }
 
     /**
-     * Checks if this is a user termination event.
-     * @return true if the ChangeType is 'TerminatedUser'
+     * Check if this is a terminated user event
      */
     public boolean isTerminatedUser() {
         return "TerminatedUser".equalsIgnoreCase(changeType);
     }
 
     /**
-     * Checks if this is a data change event.
-     * @return true if the ChangeType is 'DataChange'
+     * Check if this is a data change event
      */
     public boolean isDataChange() {
         return "DataChange".equalsIgnoreCase(changeType);
+    }
+
+    /**
+     * Gets the user identifier for database lookups
+     * This maps PJNumber to the username field in AppUser
+     */
+    public String getUserIdentifier() {
+        return pjNumber != null ? pjNumber.toLowerCase() : null;
     }
 }

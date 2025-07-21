@@ -37,4 +37,26 @@ public interface UserTeamMembershipRepository extends JpaRepository<UserTeamMemb
      */
     @Query("SELECT utm FROM UserTeamMembership utm WHERE utm.id.teamCrbtId = :crbtId")
     List<UserTeamMembership> findByTeamCrbtId(@Param("crbtId") Integer crbtId);
+
+    /**
+     * Finds users who are members of multiple teams for analysis.
+     * Returns username and count of teams they belong to.
+     */
+    @Query("SELECT u.username, COUNT(utm.id.teamCrbtId) as teamCount " +
+           "FROM UserTeamMembership utm " +
+           "JOIN utm.user u " +
+           "GROUP BY u.username " +
+           "HAVING COUNT(utm.id.teamCrbtId) > 1 " +
+           "ORDER BY teamCount DESC")
+    List<Object[]> findUsersWithMultipleTeams();
+
+    /**
+     * Finds team member counts for analysis.
+     * Returns team ID and count of active members.
+     */
+    @Query("SELECT utm.id.teamCrbtId, COUNT(utm.id.userUsername) as memberCount " +
+           "FROM UserTeamMembership utm " +
+           "GROUP BY utm.id.teamCrbtId " +
+           "ORDER BY memberCount DESC")
+    List<Object[]> findTeamMemberCounts();
 }

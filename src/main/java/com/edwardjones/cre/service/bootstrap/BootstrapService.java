@@ -16,6 +16,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.Optional;
 
 @Slf4j
@@ -75,10 +76,11 @@ public class BootstrapService {
 
             // Create memberships for each member in the team
             for (CrbtApiClient.CrbtApiTeamResponse.CrbtApiMember member : teamResponse.memberList) {
-                // Find the user by their p/j number (mbrJorP)
-                Optional<AppUser> userOpt = appUserRepository.findById(member.mbrJorP);
+                // FIXED: Find the user by their employee ID (mbrEmplId) instead of mbrJorP
+                Optional<AppUser> userOpt = appUserRepository.findByEmployeeId(member.mbrEmplId);
                 if (userOpt.isEmpty()) {
-                    log.warn("User {} not found in database for team membership", member.mbrJorP);
+                    log.warn("User with employeeId {} (P/J: {}) not found in database for team membership",
+                            member.mbrEmplId, member.mbrJorP);
                     continue;
                 }
 
@@ -91,14 +93,16 @@ public class BootstrapService {
                 membership.setUser(user);
                 membership.setTeam(team);
                 membership.setMemberRole(member.mbrRoleCd);
-                membership.setEffectiveStartDate(LocalDate.now().minusDays(30)); // Assume active for 30 days
-                membership.setEffectiveEndDate(null); // Active membership
+
+                // FIXED: Parse actual dates from CRT data instead of hardcoded values
+                membership.setEffectiveStartDate(parseCrtDate(member.mbrBegDa));
+                membership.setEffectiveEndDate(parseCrtDate(member.mbrEndDa));
 
                 userTeamMembershipRepository.save(membership);
                 membershipCount++;
 
-                log.debug("Created membership: {} in team {} as {}",
-                    user.getUsername(), team.getCrbtId(), member.mbrRoleCd);
+                log.debug("Created membership: {} (empId: {}) in team {} as {}",
+                    user.getUsername(), user.getEmployeeId(), team.getCrbtId(), member.mbrRoleCd);
             }
         }
 
@@ -106,6 +110,51 @@ public class BootstrapService {
 
         // Log some interesting findings for testing
         logBootstrapSummary(teamsWithMembers);
+    }
+
+    /**
+     * Parse date strings from different sources (CRT Kafka CDC, CRT REST API, and AD)
+     * CRT Kafka CDC format: "2025-07-19" (yyyy-MM-dd)
+     * CRT REST API format: "2025-05-12T00:00:00.000+00:00" (ISO)
+     * AD format: "07-01-2025" (MM-dd-yyyy)
+     */
+    private LocalDate parseDateFromAnySource(String dateString) {
+        if (dateString == null || dateString.trim().isEmpty()) {
+            return null;
+        }
+
+        try {
+            // Try CRT REST API ISO format first
+            if (dateString.contains("T")) {
+                return LocalDate.parse(dateString.substring(0, 10));
+            }
+
+            // Try CRT Kafka CDC format (yyyy-MM-dd)
+            if (dateString.matches("\\d{4}-\\d{2}-\\d{2}")) {
+                return LocalDate.parse(dateString);
+            }
+
+            // Try AD format (MM-dd-yyyy)
+            if (dateString.matches("\\d{2}-\\d{2}-\\d{4}")) {
+                DateTimeFormatter adFormatter = DateTimeFormatter.ofPattern("MM-dd-yyyy");
+                return LocalDate.parse(dateString, adFormatter);
+            }
+
+            // Fallback - try standard ISO date format
+            return LocalDate.parse(dateString);
+
+        } catch (Exception e) {
+            log.warn("Could not parse date '{}' from any known format, using current date", dateString);
+            return LocalDate.now();
+        }
+    }
+
+    /**
+     * Parse CRT date format to LocalDate (keeping for backward compatibility)
+     * CRT format: "2025-05-12T00:00:00.000+00:00"
+     */
+    private LocalDate parseCrtDate(String crtDateString) {
+        return parseDateFromAnySource(crtDateString);
     }
 
     /**
