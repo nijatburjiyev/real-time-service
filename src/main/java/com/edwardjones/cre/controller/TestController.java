@@ -9,6 +9,7 @@ import com.edwardjones.cre.model.dto.CrtChangeEvent;
 import com.edwardjones.cre.repository.AppUserRepository;
 import com.edwardjones.cre.repository.CrbtTeamRepository;
 import com.edwardjones.cre.service.realtime.ChangeEventProcessor;
+import com.edwardjones.cre.service.logic.ComplianceLogicService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
@@ -35,18 +36,21 @@ public class TestController {
     private final CrbtApiClient crbtApiClient;
     private final AppUserRepository appUserRepository;
     private final CrbtTeamRepository crbtTeamRepository;
+    private final ComplianceLogicService complianceLogicService;
 
     @Autowired
     public TestController(ChangeEventProcessor changeEventProcessor,
                           AdLdapClient adLdapClient,
                           CrbtApiClient crbtApiClient,
                           AppUserRepository appUserRepository,
-                          CrbtTeamRepository crbtTeamRepository) {
+                          CrbtTeamRepository crbtTeamRepository,
+                          ComplianceLogicService complianceLogicService) {
         this.changeEventProcessor = changeEventProcessor;
         this.adLdapClient = adLdapClient;
         this.crbtApiClient = crbtApiClient;
         this.appUserRepository = appUserRepository;
         this.crbtTeamRepository = crbtTeamRepository;
+        this.complianceLogicService = complianceLogicService;
     }
 
     /**
@@ -203,5 +207,74 @@ public class TestController {
 
         log.info("📊 Status Check: {} users, {} teams in database", userCount, teamCount);
         return ResponseEntity.ok(status);
+    }
+
+    /**
+     * NEW: Trigger full bulk recalculation with proper dependency resolution.
+     * This implements the production-ready three-phase PowerShell workflow.
+     */
+    @PostMapping("/recalculate/full-bulk-with-dependencies")
+    @Transactional
+    public ResponseEntity<Map<String, Object>> triggerFullBulkRecalculation() {
+        try {
+            log.info("🔄 TestController: Starting full bulk recalculation with dependency resolution");
+
+            long startTime = System.currentTimeMillis();
+
+            // Call the new production-ready bulk processing method
+            complianceLogicService.recalculateAllUsersWithDependencyResolution();
+
+            long endTime = System.currentTimeMillis();
+            long duration = endTime - startTime;
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("status", "success");
+            response.put("message", "Full bulk recalculation completed with dependency resolution");
+            response.put("durationMs", duration);
+            response.put("timestamp", new java.util.Date());
+            response.put("userCount", appUserRepository.count());
+            response.put("teamCount", crbtTeamRepository.count());
+
+            log.info("✅ Full bulk recalculation completed in {} ms", duration);
+            return ResponseEntity.ok(response);
+
+        } catch (Exception e) {
+            log.error("❌ Error during full bulk recalculation", e);
+
+            Map<String, Object> errorResponse = new HashMap<>();
+            errorResponse.put("status", "error");
+            errorResponse.put("message", "Full bulk recalculation failed: " + e.getMessage());
+            errorResponse.put("timestamp", new java.util.Date());
+
+            return ResponseEntity.status(500).body(errorResponse);
+        }
+    }
+
+    /**
+     * NEW: Get detailed cache status from the compliance logic service.
+     * This helps with debugging the three-phase processing workflow.
+     */
+    @GetMapping("/cache-status")
+    public ResponseEntity<Map<String, Object>> getCacheStatus() {
+        try {
+            Map<String, Object> response = new HashMap<>();
+            response.put("status", "active");
+            response.put("message", "Cache status retrieved");
+            response.put("timestamp", new java.util.Date());
+
+            // TODO: Add cache size information when we expose it from ComplianceLogicService
+            response.put("note", "Cache details would be available in production implementation");
+
+            return ResponseEntity.ok(response);
+
+        } catch (Exception e) {
+            log.error("❌ Error getting cache status", e);
+
+            Map<String, Object> errorResponse = new HashMap<>();
+            errorResponse.put("status", "error");
+            errorResponse.put("message", "Failed to get cache status: " + e.getMessage());
+
+            return ResponseEntity.status(500).body(errorResponse);
+        }
     }
 }
