@@ -31,3 +31,28 @@ app:
       dlt: compliance-sync.dlt # Dead Letter Topic
   reconciliation:
     cron: "0 0 2 * * ?" # 2 AM every day
+  
+  # Client Configuration for Production
+  client:
+    # LDAP Configuration for Active Directory
+    ldap:
+      url: ${LDAP_URL:ldap://ad.edwardjones.com:389}
+      base: ${LDAP_BASE:DC=edj,DC=ad,DC=edwardjones,DC=com}
+      username: ${LDAP_USERNAME:CN=service-account,OU=Service Accounts,DC=edj,DC=ad,DC=edwardjones,DC=com}
+      password: ${LDAP_PASSWORD:your-ldap-password}
+      search-bases:
+        - "OU=People,DC=edj,DC=ad,DC=edwardjones,DC=com"
+        - "OU=Branch,OU=US,OU=People,DC=edj,DC=ad,DC=edwardjones,DC=com"
+        - "OU=Home Office,OU=US,OU=People,DC=edj,DC=ad,DC=edwardjones,DC=com"
+        - "OU=Home Office,OU=CA,OU=People,DC=edj,DC=ad,DC=edwardjones,DC=com"
+    
+    # CRBT API Configuration
+    crbt:
+      base-url: ${CRBT_API_BASE_URL:https://crbt-api.edwardjones.com/api/v1}
+      ejauth-token: ${CRBT_EJAUTH_TOKEN:your-ejauth-token}
+      ejpky-token: ${CRBT_EJPKY_TOKEN:your-ejpky-token}
+    
+    # Vendor API Configuration
+    vendor:
+      base-url: ${VENDOR_API_BASE_URL:https://vendor-api.example.com/api/v1}
+      api-key: ${VENDOR_API_KEY:your-vendor-api-key}

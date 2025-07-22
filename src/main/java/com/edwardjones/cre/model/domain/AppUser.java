@@ -7,6 +7,12 @@ import java.util.HashSet;
 import java.util.Set;
 import java.util.Objects;
 
+/**
+ * Pure JPA entity representing an application user.
+ *
+ * This entity contains only persistent state - no calculated fields.
+ * Calculation results are returned via DesiredConfiguration DTO.
+ */
 @Getter
 @Setter
 @Entity
@@ -41,13 +47,6 @@ public class AppUser {
     // Relationship to team memberships - using Set to avoid duplicates
     @OneToMany(mappedBy = "user", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     private Set<UserTeamMembership> teamMemberships = new HashSet<>();
-
-    // Calculated fields for business logic results (not persisted)
-    @Transient
-    private String calculatedVisibilityProfile;
-
-    @Transient
-    private Set<String> calculatedGroups;
 
     // Custom equals and hashCode to prevent Hibernate circular dependency issues
     @Override

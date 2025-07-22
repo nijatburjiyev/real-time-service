@@ -1,15 +1,17 @@
 package com.edwardjones.cre.service.realtime;
 
-import com.edwardjones.cre.service.logic.ComplianceLogicService;
+import com.edwardjones.cre.client.VendorApiClient;
 import com.edwardjones.cre.model.domain.AppUser;
 import com.edwardjones.cre.model.domain.CrbtTeam;
 import com.edwardjones.cre.model.domain.UserTeamMembership;
 import com.edwardjones.cre.model.domain.UserTeamMembershipId;
 import com.edwardjones.cre.model.dto.AdChangeEvent;
 import com.edwardjones.cre.model.dto.CrtChangeEvent;
+import com.edwardjones.cre.model.dto.DesiredConfiguration;
 import com.edwardjones.cre.repository.AppUserRepository;
 import com.edwardjones.cre.repository.CrbtTeamRepository;
 import com.edwardjones.cre.repository.UserTeamMembershipRepository;
+import com.edwardjones.cre.service.logic.ComplianceLogicService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -24,13 +26,14 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
- * Lean orchestrator for processing Kafka change events.
+ * Clean orchestrator for processing Kafka change events.
  *
  * Responsibilities (Single Responsibility Principle):
  * 1. Receive and validate Kafka events
  * 2. Update state in the H2 database
  * 3. Determine scope of impact (which users are affected)
- * 4. Delegate business logic and vendor updates to ComplianceLogicService
+ * 4. Delegate business logic to ComplianceLogicService
+ * 5. Push calculated results to vendor via VendorApiClient
  *
  * This class should NOT contain complex business logic - that belongs in ComplianceLogicService.
  */
@@ -49,9 +52,12 @@ public class ChangeEventProcessor {
     // Business logic delegation
     private final ComplianceLogicService complianceLogicService;
 
+    // Vendor integration
+    private final VendorApiClient vendorApiClient;
+
     /**
      * Main entry point for AD change events.
-     * Orchestrates: State Update -> Impact Analysis -> Business Logic Delegation
+     * Orchestrates: State Update -> Impact Analysis -> Business Logic Delegation -> Vendor Push
      */
     @Transactional
     public void processAdChange(AdChangeEvent event) {
@@ -79,7 +85,7 @@ public class ChangeEventProcessor {
 
     /**
      * Main entry point for CRT change events.
-     * Orchestrates: State Update -> Impact Analysis -> Business Logic Delegation
+     * Orchestrates: State Update -> Impact Analysis -> Business Logic Delegation -> Vendor Push
      */
     @Transactional
     public void processCrtChange(CrtChangeEvent event) {
@@ -105,13 +111,6 @@ public class ChangeEventProcessor {
 
     private void processNewUserEvent(AdChangeEvent event) {
         log.info("📝 Processing new user creation: {}", event.getPjNumber());
-
-        Optional<AppUser> existingUser = appUserRepository.findById(event.getPjNumber());
-        if (existingUser.isPresent()) {
-            log.warn("⚠️ NewUser event received for existing user: {}", event.getPjNumber());
-            return;
-        }
-
         // TODO: Implement full user profile fetch and creation logic
         log.info("ℹ️ New user {} requires full profile fetch from AD", event.getPjNumber());
     }
@@ -130,8 +129,8 @@ public class ChangeEventProcessor {
         user.setActive(false);
         appUserRepository.save(user);
 
-        // 2. Delegate to business logic service
-        complianceLogicService.recalculateAndPushUpdate(user);
+        // 2. Delegate to business logic service and push to vendor
+        processAndPushUserUpdate(user.getUsername());
 
         log.info("✅ User {} deactivated and vendor updated", event.getPjNumber());
     }
@@ -157,22 +156,20 @@ public class ChangeEventProcessor {
         appUserRepository.save(user);
 
         // 2. Determine scope of impact
-        Set<AppUser> affectedUsers = new HashSet<>();
-        affectedUsers.add(user); // The user themselves is always affected
+        Set<String> affectedUsernames = new HashSet<>();
+        affectedUsernames.add(user.getUsername()); // The user themselves is always affected
 
         // If this is an impactful change to a leader, their direct reports are also affected
-        if (isImpactfulChange) {
-            List<AppUser> directReports = appUserRepository.findByManagerUsername(user.getUsername());
-            if (!directReports.isEmpty()) {
-                log.info("👥 Leader change detected. Adding {} direct reports to impact scope", directReports.size());
-                affectedUsers.addAll(directReports);
-            }
+        List<AppUser> directReports = appUserRepository.findByManagerUsername(user.getUsername());
+        if (!directReports.isEmpty()) {
+            log.info("👥 Leader change detected. Adding {} direct reports to impact scope", directReports.size());
+            directReports.forEach(report -> affectedUsernames.add(report.getUsername()));
         }
 
-        // 3. Delegate to business logic service
-        complianceLogicService.recalculateAndPushUpdates(affectedUsers);
+        // 3. Delegate to business logic service and push to vendor
+        processAndPushUserUpdates(affectedUsernames);
 
-        log.info("✅ Processed AD change for {} users", affectedUsers.size());
+        log.info("✅ Processed AD change for {} users", affectedUsernames.size());
     }
 
     // ==================== CRT EVENT HANDLERS ====================
@@ -192,17 +189,16 @@ public class ChangeEventProcessor {
         crbtTeamRepository.save(team);
 
         List<UserTeamMembership> memberships = userTeamMembershipRepository.findByTeamCrbtId(event.getCrbtId());
-        userTeamMembershipRepository.deleteAll(memberships);
-
-        // 2. Determine impact scope
-        Set<AppUser> affectedUsers = memberships.stream()
-                .map(membership -> membership.getUser())
+        Set<String> affectedUsernames = memberships.stream()
+                .map(membership -> membership.getUser().getUsername())
                 .collect(Collectors.toSet());
 
-        // 3. Delegate to business logic service
-        complianceLogicService.recalculateAndPushUpdates(affectedUsers);
+        userTeamMembershipRepository.deleteAll(memberships);
 
-        log.info("✅ Team {} deactivated, {} users recalculated", event.getCrbtId(), affectedUsers.size());
+        // 2. Delegate to business logic service and push to vendor
+        processAndPushUserUpdates(affectedUsernames);
+
+        log.info("✅ Team {} deactivated, {} users recalculated", event.getCrbtId(), affectedUsernames.size());
     }
 
     private void processMemberLeaving(CrtChangeEvent event) {
@@ -215,17 +211,13 @@ public class ChangeEventProcessor {
             return;
         }
 
-        // 1. Update state
         AppUser user = userOpt.get();
         UserTeamMembershipId membershipId = new UserTeamMembershipId(user.getUsername(), event.getCrbtId());
 
         Optional<UserTeamMembership> membershipOpt = userTeamMembershipRepository.findById(membershipId);
         if (membershipOpt.isPresent()) {
             userTeamMembershipRepository.delete(membershipOpt.get());
-
-            // 2. Delegate to business logic service
-            complianceLogicService.recalculateAndPushUpdate(user);
-
+            processAndPushUserUpdate(user.getUsername());
             log.info("✅ User {} removed from team {} and recalculated", user.getUsername(), event.getCrbtId());
         } else {
             log.warn("⚠️ Member leaving event for user {} not in team {}", user.getUsername(), event.getCrbtId());
@@ -236,24 +228,20 @@ public class ChangeEventProcessor {
         log.info("🔄 Processing member change: team={}, member={}, role={}",
                 event.getCrbtId(), event.getMembers().getEmployeeId(), event.getMembers().getRole());
 
-        // Validate team exists
+        // Validate team and user exist
         Optional<CrbtTeam> teamOpt = crbtTeamRepository.findById(event.getCrbtId());
-        if (teamOpt.isEmpty()) {
-            log.warn("⚠️ Member change event received for non-existent team: {}", event.getCrbtId());
-            return;
-        }
-
-        // Validate user exists
         Optional<AppUser> userOpt = appUserRepository.findByEmployeeId(event.getMembers().getEmployeeId());
-        if (userOpt.isEmpty()) {
-            log.warn("⚠️ Member change event received for non-existent user: {}", event.getMembers().getEmployeeId());
+
+        if (teamOpt.isEmpty() || userOpt.isEmpty()) {
+            log.warn("⚠️ Member change event received for non-existent team {} or user {}",
+                    event.getCrbtId(), event.getMembers().getEmployeeId());
             return;
         }
 
-        // 1. Update state
         AppUser user = userOpt.get();
         CrbtTeam team = teamOpt.get();
 
+        // 1. Update state
         UserTeamMembershipId membershipId = new UserTeamMembershipId(user.getUsername(), event.getCrbtId());
         Optional<UserTeamMembership> existingMembership = userTeamMembershipRepository.findById(membershipId);
 
@@ -263,7 +251,6 @@ public class ChangeEventProcessor {
             String oldRole = membership.getMemberRole();
             membership.setMemberRole(event.getMembers().getRole());
             userTeamMembershipRepository.save(membership);
-
             log.info("📝 Updated user {} role in team {} from {} to {}",
                     user.getUsername(), event.getCrbtId(), oldRole, event.getMembers().getRole());
         } else {
@@ -274,31 +261,52 @@ public class ChangeEventProcessor {
             newMembership.setTeam(team);
             newMembership.setMemberRole(event.getMembers().getRole());
             userTeamMembershipRepository.save(newMembership);
-
             log.info("➕ Added user {} to team {} with role {}",
                     user.getUsername(), event.getCrbtId(), event.getMembers().getRole());
         }
 
         // 2. Determine impact scope
-        Set<AppUser> affectedUsers = new HashSet<>();
-        affectedUsers.add(user);
+        Set<String> affectedUsernames = new HashSet<>();
+        affectedUsernames.add(user.getUsername());
 
         // If this is a managerial change, also include direct reports
         if (event.isManagerialChange()) {
             List<AppUser> directReports = appUserRepository.findByManagerUsername(user.getUsername());
             if (!directReports.isEmpty()) {
                 log.info("👥 Managerial change detected. Adding {} direct reports to impact scope", directReports.size());
-                affectedUsers.addAll(directReports);
+                directReports.forEach(report -> affectedUsernames.add(report.getUsername()));
             }
         }
 
-        // 3. Delegate to business logic service
-        complianceLogicService.recalculateAndPushUpdates(affectedUsers);
+        // 3. Delegate to business logic service and push to vendor
+        processAndPushUserUpdates(affectedUsernames);
 
-        log.info("✅ Processed member change for {} users", affectedUsers.size());
+        log.info("✅ Processed member change for {} users", affectedUsernames.size());
     }
 
     // ==================== UTILITY METHODS ====================
+
+    /**
+     * Process a single user through the business logic service and push to vendor
+     */
+    private void processAndPushUserUpdate(String username) {
+        try {
+            DesiredConfiguration config = complianceLogicService.calculateConfigurationForUser(username);
+            vendorApiClient.updateUser(config);
+            log.debug("✅ Successfully processed and pushed user: {}", username);
+        } catch (Exception e) {
+            log.error("❌ Error processing user {}: {}", username, e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Process multiple users through the business logic service and push to vendor
+     */
+    private void processAndPushUserUpdates(Set<String> usernames) {
+        for (String username : usernames) {
+            processAndPushUserUpdate(username);
+        }
+    }
 
     /**
      * Apply the AD change to the user's local state.
@@ -311,25 +319,24 @@ public class ChangeEventProcessor {
 
         if (AdChangeEvent.PROPERTY_MANAGER.toLowerCase().equals(propertyLower) ||
             AdChangeEvent.PROPERTY_MANAGER_USERNAME.toLowerCase().equals(propertyLower)) {
-            // Handle both DN format and direct username format
             String newManagerUsername = event.getNewValue();
             if (newManagerUsername != null && newManagerUsername.startsWith("CN=")) {
                 newManagerUsername = parsePjFromDn(newManagerUsername);
             }
             user.setManagerUsername(newManagerUsername);
-            return true; // Manager changes should trigger recalculation and vendor updates
+            return true;
 
         } else if (AdChangeEvent.PROPERTY_TITLE.toLowerCase().equals(propertyLower)) {
             user.setTitle(event.getNewValue());
-            return true; // A leader's title change can affect group names
+            return true;
 
         } else if (AdChangeEvent.PROPERTY_DISTINGUISHED_NAME.toLowerCase().equals(propertyLower)) {
             user.setDistinguishedName(event.getNewValue());
-            return true; // A leader's OU change could affect configurations
+            return true;
 
         } else if (AdChangeEvent.PROPERTY_ENABLED.toLowerCase().equals(propertyLower)) {
             user.setActive("true".equalsIgnoreCase(event.getNewValue()));
-            return false;
+            return false; // Enable/disable changes are not considered impactful for calculations
 
         } else if (AdChangeEvent.PROPERTY_EJ_IR_NUMBER.toLowerCase().equals(propertyLower)) {
             user.setEmployeeId(event.getNewValue());
@@ -337,15 +344,6 @@ public class ChangeEventProcessor {
 
         } else if (AdChangeEvent.PROPERTY_STATE.toLowerCase().equals(propertyLower)) {
             user.setCountry(event.getNewValue());
-            return true; // Location changes could affect compliance groups
-
-        } else if (AdChangeEvent.PROPERTY_NAME.toLowerCase().equals(propertyLower)) {
-            log.info("📛 Name change detected for user {}: {} -> {}",
-                    user.getUsername(), event.getBeforeValue(), event.getNewValue());
-            return false;
-
-        } else if (AdChangeEvent.PROPERTY_TEAM_ROLE.toLowerCase().equals(propertyLower)) {
-            // Handle team role changes - this is an impactful change
             return true;
 
         } else {
