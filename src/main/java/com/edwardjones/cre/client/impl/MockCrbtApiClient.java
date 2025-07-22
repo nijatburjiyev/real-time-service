@@ -20,8 +20,9 @@ public class MockCrbtApiClient implements CrbtApiClient {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Override
+    @Deprecated
     public List<CrbtTeam> fetchAllTeams() {
-        log.info("MOCK - Fetching all teams from CRBT API...");
+        log.warn("DEPRECATED: fetchAllTeams() called in test environment");
         try {
             return loadTeamsFromJsonFile();
         } catch (Exception e) {
@@ -31,13 +32,44 @@ public class MockCrbtApiClient implements CrbtApiClient {
     }
 
     @Override
+    @Deprecated
     public List<CrbtApiTeamResponse> fetchAllTeamsWithMembers() {
-        log.info("MOCK - Fetching all teams with member details from CRBT API...");
+        log.warn("DEPRECATED: fetchAllTeamsWithMembers() called in test environment");
         try {
             return loadTeamsWithMembersFromJsonFile();
         } catch (Exception e) {
             log.warn("Could not load teams with members from JSON file, falling back to hardcoded data: {}", e.getMessage());
             return new ArrayList<>();
+        }
+    }
+
+    @Override
+    public List<CrbtApiTeamResponse> fetchTeamsForLeader(String pjNumber) {
+        log.info("MOCK - Fetching teams for leader: {}", pjNumber);
+        try {
+            List<CrbtApiTeamResponse> allTeams = loadTeamsWithMembersFromJsonFile();
+            // Filter teams where the leader is a member or matches the test data pattern
+            return allTeams.stream()
+                    .filter(team -> team.memberList != null && team.memberList.stream()
+                            .anyMatch(member -> pjNumber.equals(member.mbrJorP) && "LEAD".equals(member.mbrRoleCd)))
+                    .collect(java.util.stream.Collectors.toList());
+        } catch (Exception e) {
+            log.warn("Could not load teams for leader from JSON file: {}", e.getMessage());
+            return java.util.Collections.emptyList();
+        }
+    }
+
+    @Override
+    public List<CrbtApiTeamResponse> fetchTeamDetails(Integer crbtId) {
+        log.info("MOCK - Fetching team details for ID: {}", crbtId);
+        try {
+            List<CrbtApiTeamResponse> allTeams = loadTeamsWithMembersFromJsonFile();
+            return allTeams.stream()
+                    .filter(team -> crbtId.equals(team.crbtID))
+                    .collect(java.util.stream.Collectors.toList());
+        } catch (Exception e) {
+            log.warn("Could not load team details from JSON file: {}", e.getMessage());
+            return java.util.Collections.emptyList();
         }
     }
 

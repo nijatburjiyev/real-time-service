@@ -17,16 +17,14 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
  * The single, authoritative service for bootstrapping the application's state.
- * This service is responsible for creating a clean, consistent snapshot of the
- * world from source systems (AD, CRBT) on application startup.
+ * This service implements the corrected "discover then detail" logic that mirrors
+ * the PowerShell script approach, accounting for the CRBT API's lookup-based design.
  *
  * It follows a robust "Fetch, then Process & Persist" pattern to ensure
  * transactional integrity and resilience.
@@ -48,38 +46,69 @@ public class ProductionBootstrapService implements ApplicationRunner {
      * application context is fully loaded.
      */
     @Override
-    @Transactional
     public void run(ApplicationArguments args) {
+        if (appUserRepository.count() > 0) {
+            log.info("✅ State database already contains {} users. Skipping bootstrap.", appUserRepository.count());
+            return;
+        }
         log.info("🚀 Starting production bootstrap process...");
 
         try {
             // --- PHASE 1: FETCH (No Database Transaction) ---
-            // Fetch all data from external network sources first. This keeps the
-            // database transaction short and avoids holding locks during network I/O.
-            log.info("FETCH PHASE: Retrieving data from AD and CRBT...");
+            log.info("FETCH PHASE 1A: Retrieving all users from AD...");
             List<AppUser> usersFromAd = adLdapClient.fetchAllUsers();
-            List<CrbtApiClient.CrbtApiTeamResponse> teamsWithMembers = crbtApiClient.fetchAllTeamsWithMembers();
-            log.info("FETCH PHASE: Retrieved {} users from AD and {} teams from CRBT.", usersFromAd.size(), teamsWithMembers.size());
+            log.info("FETCH PHASE 1A: Retrieved {} users from AD.", usersFromAd.size());
+
+            log.info("FETCH PHASE 1B: Discovering all unique CRBT teams by querying for each Branch Leader...");
+            Set<Integer> uniqueTeamIds = discoverAllTeamIds(usersFromAd);
+            log.info("FETCH PHASE 1B: Discovered {} unique CRBT teams.", uniqueTeamIds.size());
+
+            log.info("FETCH PHASE 1C: Retrieving full details for each unique team...");
+            List<CrbtApiClient.CrbtApiTeamResponse> teamsWithMembers = fetchAllTeamDetails(uniqueTeamIds);
+            log.info("FETCH PHASE 1C: Retrieved full details for {} teams.", teamsWithMembers.size());
 
             // --- PHASE 2: PROCESS & PERSIST (Single Database Transaction) ---
-            // Now, perform all database operations within a single, atomic transaction.
             persistStateToDatabase(usersFromAd, teamsWithMembers);
 
             log.info("✅ Bootstrap process completed successfully.");
-
         } catch (Exception e) {
-            log.error("💥 CRITICAL: Bootstrap process failed. The application state may be inconsistent. Please investigate.", e);
-            // In a real production scenario, you might want to shut down the application
-            // or prevent it from connecting to Kafka if the bootstrap fails.
-            throw new RuntimeException("Bootstrap failed", e);
+            log.error("💥 CRITICAL: Bootstrap process failed, preventing application startup.", e);
+            throw new RuntimeException("Bootstrap failed, preventing application startup.", e);
         }
     }
 
-    /**
-     * Internal method to persist data to database. The transaction boundary
-     * is managed by the calling run() method.
-     */
-    private void persistStateToDatabase(List<AppUser> usersFromAd, List<CrbtApiClient.CrbtApiTeamResponse> teamsWithMembers) {
+    private Set<Integer> discoverAllTeamIds(List<AppUser> allUsers) {
+        // First, identify who the Branch Leaders are.
+        Map<String, AppUser> userMap = allUsers.stream().collect(Collectors.toMap(AppUser::getUsername, Function.identity()));
+        Set<String> leaderUsernames = userMap.values().stream()
+                .filter(u -> u.getManagerUsername() != null)
+                .map(AppUser::getManagerUsername)
+                .collect(Collectors.toSet());
+
+        List<AppUser> branchLeaders = allUsers.stream()
+                .filter(user -> leaderUsernames.contains(user.getUsername()))
+                .filter(user -> user.getDistinguishedName() != null && user.getDistinguishedName().contains("OU=Branch"))
+                .collect(Collectors.toList());
+
+        log.info("Identified {} potential Branch Leaders to query for teams.", branchLeaders.size());
+
+        // For each leader, call the API to find their teams and collect the unique IDs.
+        return branchLeaders.parallelStream() // Use parallel stream for performance
+                .flatMap(leader -> crbtApiClient.fetchTeamsForLeader(leader.getUsername()).stream())
+                .map(teamResponse -> teamResponse.crbtID)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+    }
+
+    private List<CrbtApiClient.CrbtApiTeamResponse> fetchAllTeamDetails(Set<Integer> teamIds) {
+        // For each unique team ID, get its full member list.
+        return teamIds.parallelStream() // Use parallel stream for performance
+                .flatMap(id -> crbtApiClient.fetchTeamDetails(id).stream())
+                .collect(Collectors.toList());
+    }
+
+    @Transactional
+    public void persistStateToDatabase(List<AppUser> usersFromAd, List<CrbtApiClient.CrbtApiTeamResponse> teamsWithMembers) {
         log.info("PERSIST PHASE: Starting database transaction...");
 
         // 1. Wipe all existing state for a clean slate
@@ -151,12 +180,11 @@ public class ProductionBootstrapService implements ApplicationRunner {
                                 }
                                 UserTeamMembership membership = new UserTeamMembership(user, team);
                                 membership.setMemberRole(member.mbrRoleCd);
-                                // You can parse real dates here if available
-                                membership.setEffectiveStartDate(LocalDate.now().minusDays(30));
+                                membership.setEffectiveStartDate(LocalDate.now());
                                 return membership;
                             });
                 })
-                .filter(java.util.Objects::nonNull)
+                .filter(Objects::nonNull)
                 .collect(Collectors.toList());
 
         userTeamMembershipRepository.saveAll(memberships);

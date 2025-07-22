@@ -28,7 +28,9 @@ public class ProductionCrbtApiClient implements CrbtApiClient {
     }
 
     @Override
+    @Deprecated
     public List<CrbtTeam> fetchAllTeams() {
+        log.warn("DEPRECATED: fetchAllTeams() called. This method uses incorrect bulk fetch logic.");
         return fetchAllTeamsWithMembers().stream()
                 .map(response -> {
                     CrbtTeam team = new CrbtTeam();
@@ -42,13 +44,32 @@ public class ProductionCrbtApiClient implements CrbtApiClient {
     }
 
     @Override
+    @Deprecated
     public List<CrbtApiTeamResponse> fetchAllTeamsWithMembers() {
-        log.info("Fetching all teams with members from production CRBT API...");
+        log.warn("DEPRECATED: fetchAllTeamsWithMembers() called. This method uses incorrect bulk fetch logic and will return empty list.");
+        // This method is fundamentally flawed as the API doesn't support bulk fetch
+        return Collections.emptyList();
+    }
 
-        String url = UriComponentsBuilder.fromPath("")
+    @Override
+    public List<CrbtApiTeamResponse> fetchTeamsForLeader(String pjNumber) {
+        log.debug("CRBT_API: Fetching teams for leader (idType=J): {}", pjNumber);
+        return executeCrbtQuery(pjNumber, "J");
+    }
+
+    @Override
+    public List<CrbtApiTeamResponse> fetchTeamDetails(Integer crbtId) {
+        log.debug("CRBT_API: Fetching full details for team (idType=C): {}", crbtId);
+        return executeCrbtQuery(String.valueOf(crbtId), "C");
+    }
+
+    private List<CrbtApiTeamResponse> executeCrbtQuery(String id, String idType) {
+        String url = UriComponentsBuilder.fromPath("/crt-teams")
                 .queryParam("callingPgm", "CRE-Sync-Service")
-                .queryParam("idType", "A") // 'A' for All
+                .queryParam("id", id)
+                .queryParam("idType", idType)
                 .queryParam("returnPopulation", "A")
+                .queryParam("returnHistoryCurrent", "C")
                 .toUriString();
 
         try {
@@ -58,10 +79,9 @@ public class ProductionCrbtApiClient implements CrbtApiClient {
                     null,
                     new ParameterizedTypeReference<>() {}
             );
-            log.info("Successfully retrieved {} teams from CRBT API.", response.getBody() != null ? response.getBody().size() : 0);
-            return response.getBody();
+            return response.getBody() != null ? response.getBody() : Collections.emptyList();
         } catch (Exception e) {
-            log.error("Failed to fetch teams from CRBT API", e);
+            log.error("CRBT_API: Failed to execute query for id='{}', idType='{}'. Error: {}", id, idType, e.getMessage());
             return Collections.emptyList();
         }
     }
