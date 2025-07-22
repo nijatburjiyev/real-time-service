@@ -11,7 +11,7 @@ spring:
     database-platform: org.hibernate.dialect.H2Dialect
     hibernate:
       ddl-auto: update # Creates/updates the schema on startup
-    show-sql: true
+    show-sql: false # Disable noisy SQL logging
   # Kafka Configuration
   kafka:
     bootstrap-servers: localhost:9092 # Change to your Kafka broker
@@ -21,6 +21,43 @@ spring:
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+
+# Optimized Logging Configuration for Bootstrap Debugging
+logging:
+  level:
+    # Set root level to INFO to reduce noise
+    root: INFO
+
+    # Bootstrap-specific logging - KEEP THESE for debugging data issues
+    com.edwardjones.cre.service.bootstrap: DEBUG
+    com.edwardjones.cre.client: INFO  # API calls and responses
+
+    # Database/JPA - Only errors and warnings for data integrity issues
+    org.hibernate: WARN
+    org.hibernate.SQL: ERROR  # Only show SQL errors, not all queries
+    org.hibernate.engine.jdbc.spi.SqlExceptionHelper: ERROR
+    org.springframework.orm.jpa: WARN
+    org.springframework.transaction: WARN
+
+    # Spring Framework - Reduce noise but keep important startup info
+    org.springframework: INFO
+    org.springframework.boot.autoconfigure: WARN
+    org.springframework.security: WARN
+    org.springframework.web: WARN
+
+    # Kafka - Only important events
+    org.apache.kafka: WARN
+    org.springframework.kafka: INFO
+
+    # External libraries - Minimal logging
+    org.springframework.ldap: WARN
+    com.fasterxml.jackson: WARN
+    org.apache.http: WARN
+
+  # Custom pattern to make bootstrap logs easier to identify
+  pattern:
+    console: "%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{50} - %msg%n"
 
 # Custom Application Properties
 app:

@@ -52,29 +52,29 @@ public class ProductionBootstrapService implements ApplicationRunner {
             log.info("✅ State database already contains {} users. Skipping bootstrap.", appUserRepository.count());
             return;
         }
-        log.info("🚀 Starting production bootstrap process...");
+        log.info("[BOOTSTRAP] 🚀 Starting production bootstrap process...");
 
         try {
             // --- PHASE 1: FETCH (No Database Transaction) ---
-            log.info("FETCH PHASE 1A: Retrieving all users from AD...");
+            log.info("[BOOTSTRAP] FETCH PHASE 1A: Retrieving all users from AD...");
             List<AppUser> usersFromAd = adLdapClient.fetchAllUsers();
-            log.info("FETCH PHASE 1A: Retrieved {} users from AD.", usersFromAd.size());
+            log.info("[BOOTSTRAP] FETCH PHASE 1A Complete: Retrieved {} users from AD.", usersFromAd.size());
 
-            log.info("FETCH PHASE 1B: Discovering all unique CRBT teams by querying for each Branch Leader...");
+            log.info("[BOOTSTRAP] FETCH PHASE 1B: Discovering all unique CRBT teams by querying for each Branch Leader...");
             Set<Integer> uniqueTeamIds = discoverAllTeamIds(usersFromAd);
-            log.info("FETCH PHASE 1B: Discovered {} unique CRBT teams.", uniqueTeamIds.size());
+            log.info("[BOOTSTRAP] FETCH PHASE 1B Complete: Discovered {} unique CRBT teams.", uniqueTeamIds.size());
 
-            log.info("FETCH PHASE 1C: Retrieving full details for each unique team...");
+            log.info("[BOOTSTRAP] FETCH PHASE 1C: Retrieving full details for each unique team...");
             List<CrbtApiClient.CrbtApiTeamResponse> teamsWithMembers = fetchAllTeamDetails(uniqueTeamIds);
-            log.info("FETCH PHASE 1C: Retrieved full details for {} teams.", teamsWithMembers.size());
+            log.info("[BOOTSTRAP] FETCH PHASE 1C Complete: Retrieved full details for {} teams.", teamsWithMembers.size());
 
             // --- PHASE 2: PROCESS & PERSIST (Single Database Transaction) ---
             persistStateToDatabase(usersFromAd, teamsWithMembers);
 
-            log.info("✅ Bootstrap process completed successfully.");
+            log.info("[BOOTSTRAP] ✅ Bootstrap process completed successfully.");
 
         } catch (Exception e) {
-            log.error("💥 CRITICAL: Bootstrap process failed. The application state may be inconsistent.", e);
+            log.error("[BOOTSTRAP] 💥 CRITICAL: Bootstrap process failed. The application state may be inconsistent.", e);
             throw new RuntimeException("Bootstrap failed, preventing application startup.", e);
         }
     }
@@ -141,98 +141,101 @@ public class ProductionBootstrapService implements ApplicationRunner {
      * This method is annotated as @Transactional. All operations within it will
      * either succeed together or fail together, ensuring data consistency.
      *
-     * CRITICAL FIX: This method now handles data integrity issues gracefully,
-     * preventing the EntityNotFoundException that was crashing the application.
+     * CRITICAL FIX: Two-pass approach - save users first, then establish manager
+     * relationships to prevent EntityNotFoundException crashes.
      */
     @Transactional
     public void persistStateToDatabase(List<AppUser> usersFromAd,
                                      List<CrbtApiClient.CrbtApiTeamResponse> teamsWithMembers) {
-        log.info("PERSIST PHASE: Starting database transaction...");
+        log.info("[BOOTSTRAP] PERSIST PHASE: Starting database transaction...");
 
         // 1. Wipe all existing state for a clean slate
         userTeamMembershipRepository.deleteAllInBatch();
         appUserRepository.deleteAllInBatch();
         crbtTeamRepository.deleteAllInBatch();
-        log.info("PERSIST PHASE: Old data cleared.");
+        log.info("[BOOTSTRAP] PERSIST PHASE: Old data cleared.");
 
         if (usersFromAd.isEmpty()) {
-            log.warn("No users fetched from AD. The state database will be empty.");
+            log.warn("[BOOTSTRAP] No users fetched from AD. The state database will be empty.");
             return;
         }
 
-        // 2. Process and Save Users with resilient manager linking
-        Map<String, AppUser> userMap = usersFromAd.stream()
-                .collect(Collectors.toMap(AppUser::getUsername, Function.identity()));
+        // 2. Save all users first, ignoring manager links for now.
+        // This ensures all potential managers exist in the DB before we try to link to them.
+        usersFromAd.forEach(user -> {
+            user.setManager(null); // Clear any in-memory manager references
+        });
+        appUserRepository.saveAll(usersFromAd);
+        appUserRepository.flush(); // Force the insert statements to execute
+        log.info("[BOOTSTRAP] PERSIST PHASE (PASS 1): Saved {} raw user records to the database.", usersFromAd.size());
 
-        // **CRITICAL FIX**: Link manager objects in memory *before* saving
-        // This prevents EntityNotFoundException when managers don't exist in our dataset
-        userMap.values().forEach(user -> {
+        // 3. Now, link managers in a second pass.
+        int linkedCount = 0;
+        int skippedCount = 0;
+        List<AppUser> usersToUpdate = new ArrayList<>();
+        for (AppUser user : usersFromAd) {
             if (user.getManagerUsername() != null) {
-                AppUser manager = userMap.get(user.getManagerUsername());
-                if (manager != null) {
-                    user.setManager(manager);
+                // Check if the manager actually exists in our database.
+                if (appUserRepository.existsById(user.getManagerUsername())) {
+                    // The manager exists, so this is a valid link.
+                    // We don't need to set the object; the FK string is enough.
+                    usersToUpdate.add(user);
+                    linkedCount++;
                 } else {
-                    // This is the fix for the EntityNotFoundException
-                    log.warn("Manager '{}' for user '{}' not found in the dataset. This link will be ignored.",
+                    // This is the critical fix: the manager doesn't exist in our dataset.
+                    // Log it and nullify the invalid reference before saving.
+                    log.warn("[BOOTSTRAP][DATA_INTEGRITY] Manager '{}' for user '{}' not found in the dataset. This link will be permanently ignored.",
                             user.getManagerUsername(), user.getUsername());
-                    user.setManagerUsername(null); // Clean the invalid reference
-                    user.setManager(null);
+                    user.setManagerUsername(null);
+                    usersToUpdate.add(user); // Still need to save the nulled-out manager username
+                    skippedCount++;
                 }
             }
-        });
+        }
+        appUserRepository.saveAll(usersToUpdate);
+        log.info("[BOOTSTRAP] PERSIST PHASE (PASS 2): Processed manager links for {} users. {} links were invalid and skipped.", linkedCount, skippedCount);
 
-        appUserRepository.saveAll(userMap.values());
-        log.info("PERSIST PHASE: Saved {} users to the database.", userMap.size());
-
-        // 3. Process and Save Teams
+        // 4. Process and Save Teams (unchanged)
         Set<CrbtTeam> teamsToSave = teamsWithMembers.stream()
-                .map(t -> {
-                    CrbtTeam team = new CrbtTeam();
-                    team.setCrbtId(t.crbtID);
-                    team.setTeamName(t.teamName);
-                    team.setTeamType(t.teamTyCd);
-                    team.setActive(t.tmEndDa == null);
-                    return team;
-                })
-                .collect(Collectors.toSet());
+            .map(t -> {
+                CrbtTeam team = new CrbtTeam();
+                team.setCrbtId(t.crbtID);
+                team.setTeamName(t.teamName);
+                team.setTeamType(t.teamTyCd);
+                team.setActive(t.tmEndDa == null);
+                return team;
+            })
+            .collect(Collectors.toSet());
 
         crbtTeamRepository.saveAll(teamsToSave);
-        log.info("PERSIST PHASE: Saved {} teams to the database.", teamsToSave.size());
+        log.info("[BOOTSTRAP] PERSIST PHASE: Saved {} teams to the database.", teamsToSave.size());
 
-        // 4. Process and Save Team Memberships with resilient user linking
+        // 5. Process and Save Team Memberships (with added resilience)
         Map<Integer, CrbtTeam> teamMap = teamsToSave.stream()
                 .collect(Collectors.toMap(CrbtTeam::getCrbtId, Function.identity()));
 
-        List<UserTeamMembership> memberships = teamsWithMembers.stream()
-                .filter(teamResponse -> teamResponse.memberList != null)
-                .flatMap(teamResponse -> {
-                    CrbtTeam team = teamMap.get(teamResponse.crbtID);
-                    if (team == null) {
-                        log.warn("Team with CRBT ID {} not found in saved teams. Skipping memberships.", teamResponse.crbtID);
-                        return Stream.empty();
-                    }
+        List<UserTeamMembership> memberships = new ArrayList<>();
+        for (CrbtApiClient.CrbtApiTeamResponse teamResponse : teamsWithMembers) {
+            if (teamResponse.memberList == null) continue;
 
-                    return teamResponse.memberList.stream()
-                            .map(member -> {
-                                AppUser user = userMap.get(member.mbrJorP);
-                                if (user == null) {
-                                    log.warn("User '{}' from CRBT team {} not found in AD data. Skipping membership.",
-                                            member.mbrJorP, team.getCrbtId());
-                                    return null;
-                                }
-
-                                UserTeamMembership membership = new UserTeamMembership(user, team);
-                                membership.setMemberRole(member.mbrRoleCd);
-                                // In a real scenario, you would parse the date from member.mbrBegDa
-                                membership.setEffectiveStartDate(LocalDate.now());
-                                return membership;
-                            })
-                            .filter(Objects::nonNull);
-                })
-                .toList();
+            CrbtTeam team = teamMap.get(teamResponse.crbtID);
+            for (CrbtApiClient.CrbtApiTeamResponse.CrbtApiMember member : teamResponse.memberList) {
+                // Use existsById for a fast check before a full fetch
+                if (appUserRepository.existsById(member.mbrJorP)) {
+                    AppUser user = appUserRepository.getReferenceById(member.mbrJorP); // Use getReference for performance
+                    UserTeamMembership membership = new UserTeamMembership(user, team);
+                    membership.setMemberRole(member.mbrRoleCd);
+                    membership.setEffectiveStartDate(LocalDate.now()); // Placeholder
+                    memberships.add(membership);
+                } else {
+                    log.warn("[BOOTSTRAP][DATA_INTEGRITY] User '{}' from CRBT team {} not found in AD data. Skipping membership.",
+                            member.mbrJorP, team.getCrbtId());
+                }
+            }
+        }
 
         userTeamMembershipRepository.saveAll(memberships);
-        log.info("PERSIST PHASE: Saved {} team memberships to the database.", memberships.size());
-        log.info("PERSIST PHASE: Committing transaction...");
+        log.info("[BOOTSTRAP] PERSIST PHASE: Saved {} team memberships to the database.", memberships.size());
+        log.info("[BOOTSTRAP] PERSIST PHASE: Committing transaction...");
     }
 }

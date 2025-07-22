@@ -300,12 +300,34 @@ public class ChangeEventProcessor {
     }
 
     /**
-     * Process multiple users through the business logic service and push to vendor
+     * Process multiple users through the business logic service and push to vendor.
+     * Enhanced with resilience - if one user fails, others in the batch continue processing.
      */
     private void processAndPushUserUpdates(Set<String> usernames) {
-        for (String username : usernames) {
-            processAndPushUserUpdate(username);
+        if (usernames == null || usernames.isEmpty()) {
+            return;
         }
+        log.info("[KAFKA-REALTIME] Recalculating and pushing updates for {} affected users.", usernames.size());
+
+        int successCount = 0;
+        int failureCount = 0;
+
+        for (String username : usernames) {
+            try {
+                DesiredConfiguration config = complianceLogicService.calculateConfigurationForUser(username);
+                vendorApiClient.updateUser(config);
+                log.debug("✅ Successfully processed and pushed user: {}", username);
+                successCount++;
+            } catch (Exception e) {
+                // This is a critical log. It tells you that a specific user failed to update
+                // while allowing the rest of the batch to proceed.
+                log.error("[KAFKA-REALTIME][REALTIME_FAILURE] Failed to process update for user '{}'. This user may be out of sync until the next reconciliation run.", username, e);
+                failureCount++;
+                // Do NOT re-throw the exception here - continue processing other users
+            }
+        }
+
+        log.info("[KAFKA-REALTIME] Batch processing complete: {} successful, {} failed", successCount, failureCount);
     }
 
     /**

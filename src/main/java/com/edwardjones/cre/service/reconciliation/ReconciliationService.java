@@ -38,7 +38,7 @@ public class ReconciliationService {
     @Scheduled(cron = "${app.reconciliation.cron}")
     @Transactional(readOnly = true)
     public void runDailyTrueUp() {
-        log.info("🌙 Starting nightly reconciliation job...");
+        log.info("[RECON] Starting nightly reconciliation job...");
 
         AtomicInteger processedCount = new AtomicInteger(0);
         AtomicInteger driftCount = new AtomicInteger(0);
@@ -46,13 +46,13 @@ public class ReconciliationService {
 
         try {
             // 1. Fetch actual state from vendor system
-            log.info("📥 Fetching current vendor state...");
+            log.info("[RECON] Phase 1/3: Fetching current vendor state...");
             Map<String, VendorUser> actualUserMap = vendorApiClient.getAllUsers().stream()
                     .collect(Collectors.toMap(VendorUser::getUsername, u -> u));
-            log.info("📥 Retrieved {} users from vendor system", actualUserMap.size());
+            log.info("[RECON] Phase 1/3 Complete: Retrieved {} users from vendor system", actualUserMap.size());
 
             // 2. Iterate through all users in our state database
-            log.info("🔄 Processing users for reconciliation...");
+            log.info("[RECON] Phase 2/3: Processing users for reconciliation...");
             appUserRepository.findAll().forEach(user -> {
                 try {
                     // 3. Calculate desired state using the single source of truth
@@ -63,11 +63,13 @@ public class ReconciliationService {
 
                     // 4. Compare and correct if needed
                     if (actual == null) {
-                        log.warn("[RECON] User {} missing in vendor. Creating.", desired.username());
+                        log.warn("[RECON][DRIFT] User {} missing in vendor. Creating.", desired.username());
                         vendorApiClient.createUser(desired);
                         driftCount.incrementAndGet();
                     } else if (hasDrifted(desired, actual)) {
-                        log.warn("[RECON] User {} has drifted. Correcting.", desired.username());
+                        log.warn("[RECON][DRIFT] User {} requires correction. Desired: [VP={}, Groups={}], Actual: [VP={}, Groups={}]",
+                            desired.username(), desired.visibilityProfile(), desired.groups(),
+                            actual.getVisibilityProfile(), actual.getGroups().stream().map(VendorUser.GroupRef::getGroupName).collect(Collectors.toSet()));
                         vendorApiClient.updateUser(desired);
                         driftCount.incrementAndGet();
                     } else {
@@ -76,24 +78,29 @@ public class ReconciliationService {
 
                     // Progress logging
                     if (processedCount.get() % 100 == 0) {
-                        log.info("🔄 Reconciliation progress: {} users processed, {} corrections made",
+                        log.info("[RECON] Progress: {} users processed, {} corrections made",
                                 processedCount.get(), driftCount.get());
                     }
 
                 } catch (Exception e) {
-                    log.error("❌ Error during reconciliation for user {}: {}", user.getUsername(), e.getMessage(), e);
+                    log.error("[RECON][ERROR] Failed to reconcile user '{}': {}", user.getUsername(), e.getMessage(), e);
                     errorCount.incrementAndGet();
+                    // Continue processing other users - don't re-throw
                 }
             });
 
-            log.info("✅ Nightly reconciliation job complete:");
-            log.info("   📊 {} users processed", processedCount.get());
-            log.info("   🔧 {} corrections made", driftCount.get());
-            log.info("   ❌ {} errors encountered", errorCount.get());
+            log.info("[RECON] Phase 3/3: Reconciliation analysis complete");
 
         } catch (Exception e) {
-            log.error("💥 Critical error during reconciliation job", e);
-            throw new RuntimeException("Reconciliation job failed", e);
+            log.error("[RECON][CRITICAL] A fatal error occurred during the reconciliation job, terminating early.", e);
+            // It's okay to let the job fail here if fetching from the vendor fails, for example.
+        } finally {
+            // This block ensures you ALWAYS get a summary report, even if the job fails halfway through.
+            log.info("---------- Reconciliation Job Summary ----------");
+            log.info("[RECON] Users Processed: {}", processedCount.get());
+            log.info("[RECON] Drifts Corrected: {}", driftCount.get());
+            log.info("[RECON] Record Errors:    {}", errorCount.get());
+            log.info("----------------------------------------------");
         }
     }
 
