@@ -1,6 +1,5 @@
 package com.edwardjones.cre.service.bootstrap;
 
-
 import com.edwardjones.cre.client.AdLdapClient;
 import com.edwardjones.cre.client.CrbtApiClient;
 import com.edwardjones.cre.model.domain.AppUser;
@@ -49,6 +48,7 @@ public class ProductionBootstrapService implements ApplicationRunner {
      * application context is fully loaded.
      */
     @Override
+    @Transactional
     public void run(ApplicationArguments args) {
         log.info("🚀 Starting production bootstrap process...");
 
@@ -76,11 +76,10 @@ public class ProductionBootstrapService implements ApplicationRunner {
     }
 
     /**
-     * This method is annotated as @Transactional. All operations within it will
-     * either succeed together or fail together, ensuring data consistency.
+     * Internal method to persist data to database. The transaction boundary
+     * is managed by the calling run() method.
      */
-    @Transactional
-    public void persistStateToDatabase(List<AppUser> usersFromAd, List<CrbtApiClient.CrbtApiTeamResponse> teamsWithMembers) {
+    private void persistStateToDatabase(List<AppUser> usersFromAd, List<CrbtApiClient.CrbtApiTeamResponse> teamsWithMembers) {
         log.info("PERSIST PHASE: Starting database transaction...");
 
         // 1. Wipe all existing state for a clean slate
