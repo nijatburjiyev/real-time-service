@@ -167,18 +167,32 @@ public class ComplianceLogicService {
 
              List<UserTeamMembership> memberships = userTeamMembershipRepository.findByUserUsername(leader.getUsername());
              if(!memberships.isEmpty()){
-                 String baseGroupName = String.format("%s-%s", leader.getCountry(), "State-Placeholder");
+                 // FIXED: Use the leader's actual state and country, not placeholders
+                 String baseGroupName = String.format("%s-%s", leader.getCountry(),
+                     leader.getState() != null ? leader.getState() : "Unknown");
 
                  finalGroupNames = memberships.stream()
-                     .map(m -> String.format("%s-%s-%s-%s",
-                         baseGroupName,
-                         m.getTeam().getTeamName(),
-                         "FA-No-Placeholder",
-                         m.getTeam().getTeamType()
-                     ).replace(" ", "_").replace(".", ""))
+                     .map(m -> {
+                         // FIXED: Use the actual FA number from the team's ownerFaNo field
+                         String ownerFaNo = m.getTeam().getOwnerFaNo() != null ?
+                             m.getTeam().getOwnerFaNo() : "Unknown";
+                         return String.format("%s-%s-%s-%s",
+                             baseGroupName,
+                             m.getTeam().getTeamName(),
+                             ownerFaNo, // Use the actual FA number
+                             m.getTeam().getTeamType()
+                         );
+                     })
+                     .map(groupName -> groupName.replace(" ", "_").replace("/", "").replace(".", ""))
                      .collect(Collectors.toSet());
 
-                 finalVpName = "Vis_" + finalGroupNames.stream().reduce((first, second) -> second).orElse("");
+                 // --- FIX START: Make VP Name Deterministic ---
+                 // Sort the group names alphabetically and join them to create a stable name.
+                 String sortedGroupComponent = finalGroupNames.stream()
+                                                             .sorted()
+                                                             .collect(Collectors.joining("_"));
+                 finalVpName = "Vis_" + sortedGroupComponent;
+                 // --- FIX END ---
              }
 
              finalGroupNames.add(SUBMITTER_GROUPS.get(leader.getCountry() + "-BR"));

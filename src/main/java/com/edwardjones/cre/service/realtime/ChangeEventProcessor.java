@@ -1,5 +1,6 @@
 package com.edwardjones.cre.service.realtime;
 
+import com.edwardjones.cre.client.AdLdapClient;
 import com.edwardjones.cre.client.VendorApiClient;
 import com.edwardjones.cre.model.domain.AppUser;
 import com.edwardjones.cre.model.domain.CrbtTeam;
@@ -12,6 +13,7 @@ import com.edwardjones.cre.repository.AppUserRepository;
 import com.edwardjones.cre.repository.CrbtTeamRepository;
 import com.edwardjones.cre.repository.UserTeamMembershipRepository;
 import com.edwardjones.cre.service.logic.ComplianceLogicService;
+import com.edwardjones.cre.util.LdapUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -21,8 +23,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -42,12 +42,13 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class ChangeEventProcessor {
 
-    private static final Pattern PJ_NUMBER_PATTERN = Pattern.compile("CN=((p|j)\\d{5,6}),", Pattern.CASE_INSENSITIVE);
-
     // Data access
     private final AppUserRepository appUserRepository;
     private final CrbtTeamRepository crbtTeamRepository;
     private final UserTeamMembershipRepository userTeamMembershipRepository;
+
+    // External data source
+    private final AdLdapClient adLdapClient;
 
     // Business logic delegation
     private final ComplianceLogicService complianceLogicService;
@@ -145,6 +146,7 @@ public class ChangeEventProcessor {
         }
 
         AppUser user = userOpt.get();
+        String oldManagerUsername = user.getManagerUsername(); // Capture old manager before changing
 
         // 1. Apply the change to local state
         boolean isImpactfulChange = applyAdChangeToUser(user, event);
@@ -158,6 +160,19 @@ public class ChangeEventProcessor {
         // 2. Determine scope of impact
         Set<String> affectedUsernames = new HashSet<>();
         affectedUsernames.add(user.getUsername()); // The user themselves is always affected
+
+        // Enhanced Impact Analysis: Handle managerial changes bidirectionally
+        if (event.isManagerialChange()) {
+            // If the user's manager changed, we need to update the old and new manager
+            if (oldManagerUsername != null) {
+                affectedUsernames.add(oldManagerUsername);
+                log.debug("Adding old manager {} to impact scope.", oldManagerUsername);
+            }
+            if (user.getManagerUsername() != null) {
+                affectedUsernames.add(user.getManagerUsername());
+                log.debug("Adding new manager {} to impact scope.", user.getManagerUsername());
+            }
+        }
 
         // If this is an impactful change to a leader, their direct reports are also affected
         List<AppUser> directReports = appUserRepository.findByManagerUsername(user.getUsername());
@@ -213,75 +228,79 @@ public class ChangeEventProcessor {
 
         AppUser user = userOpt.get();
         UserTeamMembershipId membershipId = new UserTeamMembershipId(user.getUsername(), event.getCrbtId());
-
         Optional<UserTeamMembership> membershipOpt = userTeamMembershipRepository.findById(membershipId);
-        if (membershipOpt.isPresent()) {
-            userTeamMembershipRepository.delete(membershipOpt.get());
-            processAndPushUserUpdate(user.getUsername());
-            log.info("✅ User {} removed from team {} and recalculated", user.getUsername(), event.getCrbtId());
-        } else {
-            log.warn("⚠️ Member leaving event for user {} not in team {}", user.getUsername(), event.getCrbtId());
+
+        if (membershipOpt.isEmpty()) {
+            log.warn("⚠️ Member leaving event for user {} who is not in team {}", user.getUsername(), event.getCrbtId());
+            return; // Exit if there's no membership to remove
         }
+
+        // 1. Update state: remove the membership
+        userTeamMembershipRepository.delete(membershipOpt.get());
+        log.info("➖ Removed user {} from team {}", user.getUsername(), event.getCrbtId());
+
+        // 2. Determine impact scope: ALL remaining members of the affected team must be recalculated.
+        Set<String> affectedUsernames = userTeamMembershipRepository.findByTeamCrbtId(event.getCrbtId()).stream()
+                .map(m -> m.getUser().getUsername())
+                .collect(Collectors.toSet());
+
+        // Also include the user who just left to ensure their config is updated to reflect the removal
+        affectedUsernames.add(user.getUsername());
+
+        // 3. Delegate to business logic service and push to vendor for all affected users
+        processAndPushUserUpdates(affectedUsernames);
+
+        log.info("✅ Processed member leaving for team {}, recalculating for {} users.", event.getCrbtId(), affectedUsernames.size());
     }
 
     private void processMemberChange(CrtChangeEvent event) {
         log.info("🔄 Processing member change: team={}, member={}, role={}",
                 event.getCrbtId(), event.getMembers().getEmployeeId(), event.getMembers().getRole());
 
-        // Validate team and user exist
-        Optional<CrbtTeam> teamOpt = crbtTeamRepository.findById(event.getCrbtId());
+        // 1. Validate and retrieve the user and team from the database
         Optional<AppUser> userOpt = appUserRepository.findByEmployeeId(event.getMembers().getEmployeeId());
+        Optional<CrbtTeam> teamOpt = crbtTeamRepository.findById(event.getCrbtId());
 
-        if (teamOpt.isEmpty() || userOpt.isEmpty()) {
-            log.warn("⚠️ Member change event received for non-existent team {} or user {}",
-                    event.getCrbtId(), event.getMembers().getEmployeeId());
+        if (userOpt.isEmpty() || teamOpt.isEmpty()) {
+            log.warn("⚠️ Member change event received for non-existent user {} or team {}",
+                    event.getMembers().getEmployeeId(), event.getCrbtId());
             return;
         }
 
         AppUser user = userOpt.get();
         CrbtTeam team = teamOpt.get();
 
-        // 1. Update state
-        UserTeamMembershipId membershipId = new UserTeamMembershipId(user.getUsername(), event.getCrbtId());
-        Optional<UserTeamMembership> existingMembership = userTeamMembershipRepository.findById(membershipId);
+        // 2. Update state in the database (add or update membership)
+        UserTeamMembershipId membershipId = new UserTeamMembershipId(user.getUsername(), team.getCrbtId());
+        UserTeamMembership membership = userTeamMembershipRepository.findById(membershipId)
+                .orElseGet(() -> {
+                    log.info("➕ Adding new member {} to team {}", user.getUsername(), team.getCrbtId());
+                    UserTeamMembership newMembership = new UserTeamMembership();
+                    newMembership.setId(membershipId);
+                    newMembership.setUser(user);
+                    newMembership.setTeam(team);
+                    return newMembership;
+                });
 
-        if (existingMembership.isPresent()) {
-            // Update existing membership role
-            UserTeamMembership membership = existingMembership.get();
-            String oldRole = membership.getMemberRole();
-            membership.setMemberRole(event.getMembers().getRole());
-            userTeamMembershipRepository.save(membership);
-            log.info("📝 Updated user {} role in team {} from {} to {}",
-                    user.getUsername(), event.getCrbtId(), oldRole, event.getMembers().getRole());
-        } else {
-            // Create new membership
-            UserTeamMembership newMembership = new UserTeamMembership();
-            newMembership.setId(membershipId);
-            newMembership.setUser(user);
-            newMembership.setTeam(team);
-            newMembership.setMemberRole(event.getMembers().getRole());
-            userTeamMembershipRepository.save(newMembership);
-            log.info("➕ Added user {} to team {} with role {}",
-                    user.getUsername(), event.getCrbtId(), event.getMembers().getRole());
+        membership.setMemberRole(event.getMembers().getRole());
+        userTeamMembershipRepository.save(membership);
+        log.info("📝 User {} role in team {} set to {}", user.getUsername(), team.getCrbtId(), event.getMembers().getRole());
+
+
+        // 3. Determine impact scope: ALL members of the affected team must be recalculated.
+        Set<String> affectedUsernames = userTeamMembershipRepository.findByTeamCrbtId(event.getCrbtId()).stream()
+                .map(m -> m.getUser().getUsername())
+                .collect(Collectors.toSet());
+
+        if (affectedUsernames.isEmpty()) {
+            log.warn("⚠️ No users found for team {} after a member change event. No updates will be pushed.", event.getCrbtId());
+            return;
         }
 
-        // 2. Determine impact scope
-        Set<String> affectedUsernames = new HashSet<>();
-        affectedUsernames.add(user.getUsername());
-
-        // If this is a managerial change, also include direct reports
-        if (event.isManagerialChange()) {
-            List<AppUser> directReports = appUserRepository.findByManagerUsername(user.getUsername());
-            if (!directReports.isEmpty()) {
-                log.info("👥 Managerial change detected. Adding {} direct reports to impact scope", directReports.size());
-                directReports.forEach(report -> affectedUsernames.add(report.getUsername()));
-            }
-        }
-
-        // 3. Delegate to business logic service and push to vendor
+        // 4. Delegate to business logic service and push to vendor for all affected users
         processAndPushUserUpdates(affectedUsernames);
 
-        log.info("✅ Processed member change for {} users", affectedUsernames.size());
+        log.info("✅ Processed member change for team {}, recalculating for {} users.", event.getCrbtId(), affectedUsernames.size());
     }
 
     // ==================== UTILITY METHODS ====================
@@ -343,7 +362,7 @@ public class ChangeEventProcessor {
             AdChangeEvent.PROPERTY_MANAGER_USERNAME.toLowerCase().equals(propertyLower)) {
             String newManagerUsername = event.getNewValue();
             if (newManagerUsername != null && newManagerUsername.startsWith("CN=")) {
-                newManagerUsername = parsePjFromDn(newManagerUsername);
+                newManagerUsername = LdapUtils.parseUsernameFromDn(newManagerUsername);
             }
             user.setManagerUsername(newManagerUsername);
             return true;
@@ -358,34 +377,19 @@ public class ChangeEventProcessor {
 
         } else if (AdChangeEvent.PROPERTY_ENABLED.toLowerCase().equals(propertyLower)) {
             user.setActive("true".equalsIgnoreCase(event.getNewValue()));
-            return false; // Enable/disable changes are not considered impactful for calculations
+            return true; // FIXED: Return true to trigger immediate update for user deactivations
 
         } else if (AdChangeEvent.PROPERTY_EJ_IR_NUMBER.toLowerCase().equals(propertyLower)) {
             user.setEmployeeId(event.getNewValue());
             return false;
 
         } else if (AdChangeEvent.PROPERTY_STATE.toLowerCase().equals(propertyLower)) {
-            user.setCountry(event.getNewValue());
+            user.setState(event.getNewValue()); // Fixed: was incorrectly calling setCountry
             return true;
 
         } else {
             log.warn("⚠️ Unhandled AD property change for user {}: {}", user.getUsername(), event.getProperty());
             return false;
         }
-    }
-
-    /**
-     * Parse PJ Number from Distinguished Name.
-     */
-    private String parsePjFromDn(String dn) {
-        if (dn == null || dn.isEmpty()) {
-            return null;
-        }
-        Matcher matcher = PJ_NUMBER_PATTERN.matcher(dn);
-        if (matcher.find()) {
-            return matcher.group(1);
-        }
-        log.warn("⚠️ Could not parse PJ Number from DN: {}", dn);
-        return null;
     }
 }

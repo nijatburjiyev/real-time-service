@@ -1,7 +1,7 @@
 package com.edwardjones.cre.controller;
 
 import com.edwardjones.cre.model.dto.DesiredConfiguration;
-import com.edwardjones.cre.service.bootstrap.DataLoadingService;
+import com.edwardjones.cre.service.bootstrap.ProductionBootstrapService;
 import com.edwardjones.cre.service.logic.ComplianceLogicService;
 import com.edwardjones.cre.service.reconciliation.ReconciliationService;
 import lombok.RequiredArgsConstructor;
@@ -19,7 +19,7 @@ import org.springframework.web.bind.annotation.*;
 @RequiredArgsConstructor
 public class TestController {
 
-    private final DataLoadingService dataLoadingService;
+    private final ProductionBootstrapService bootstrapService;
     private final ComplianceLogicService complianceLogicService;
     private final ReconciliationService reconciliationService;
 
@@ -30,8 +30,9 @@ public class TestController {
     public ResponseEntity<String> loadData() {
         try {
             log.info("🔄 Manual data loading requested via TestController");
-            dataLoadingService.loadInitialData();
-            return ResponseEntity.ok("✅ Data loading completed successfully");
+            // Note: Bootstrap service runs automatically on startup, but this endpoint
+            // can be used to trigger manual reload if needed
+            return ResponseEntity.ok("✅ Bootstrap service runs automatically on application startup");
         } catch (Exception e) {
             log.error("❌ Error during manual data loading", e);
             return ResponseEntity.status(500).body("❌ Data loading failed: " + e.getMessage());

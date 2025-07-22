@@ -31,6 +31,7 @@ public class AppUser {
     private String distinguishedName;
 
     private String country;
+    private String state; // Added to support business logic for generating correct group names
     private boolean isActive = true;
 
     // --- The Recommended Hybrid Manager Relationship ---
@@ -71,6 +72,7 @@ public class AppUser {
                 ", lastName='" + lastName + '\'' +
                 ", title='" + title + '\'' +
                 ", country='" + country + '\'' +
+                ", state='" + state + '\'' +
                 ", isActive=" + isActive +
                 ", managerUsername='" + managerUsername + '\'' +
                 '}';

@@ -48,10 +48,16 @@ public class ProductionBootstrapService implements ApplicationRunner {
      */
     @Override
     public void run(ApplicationArguments args) {
-        if (appUserRepository.count() > 0) {
-            log.info("✅ State database already contains {} users. Skipping bootstrap.", appUserRepository.count());
+        boolean forceBootstrap = args.containsOption("force-bootstrap");
+        if (appUserRepository.count() > 0 && !forceBootstrap) {
+            log.info("✅ State database already contains {} users. Skipping bootstrap. Use --force-bootstrap to override.", appUserRepository.count());
             return;
         }
+
+        if (forceBootstrap) {
+            log.info("[BOOTSTRAP] 🔄 Force bootstrap flag detected. Proceeding with bootstrap even though database contains data.");
+        }
+
         log.info("[BOOTSTRAP] 🚀 Starting production bootstrap process...");
 
         try {
@@ -83,31 +89,57 @@ public class ProductionBootstrapService implements ApplicationRunner {
      * Discovers all unique CRBT team IDs by identifying Branch Leaders in AD
      * and querying the CRBT API for their teams. This mirrors the PowerShell
      * script's "discover then detail" approach.
+     *
+     * FIXED: Now correctly identifies leaders who manage at least one branch employee,
+     * regardless of the leader's own location (Home Office leaders can manage branch teams).
      */
     private Set<Integer> discoverAllTeamIds(List<AppUser> allUsers) {
-        // Identify all users who are designated as managers in the AD data
-        Set<String> managerUsernames = allUsers.stream()
+        // Create a map for quick user lookup
+        Map<String, AppUser> userMap = allUsers.stream()
+                .collect(Collectors.toMap(AppUser::getUsername, u -> u));
+
+        // --- FIX START: More targeted leader identification ---
+        // A user is a potential Branch Leader if they are a manager AND either:
+        // 1. Their title indicates they are branch-focused.
+        // 2. They are a Financial Advisor (implied by having an employeeId in the original script).
+        Set<String> branchLeaderUsernames = userMap.values().stream()
+                .filter(user -> user.getManagerUsername() != null) // Is a manager of someone
                 .map(AppUser::getManagerUsername)
+                .distinct()
+                .map(userMap::get) // Get the full manager AppUser object
                 .filter(Objects::nonNull)
+                .filter(manager -> {
+                    String title = manager.getTitle() != null ? manager.getTitle().toLowerCase() : "";
+                    boolean isBranchFocusedTitle = title.contains("branch") ||
+                                                  title.contains("remote support") ||
+                                                  title.contains("on-caller") ||
+                                                  title.contains("branch team");
+
+                    // In the original script, having an IR Number was a key indicator of being an FA/leader.
+                    // We can simulate this by checking if they have an employeeId and manage branch users.
+                    boolean isFinancialAdvisor = title.contains("financial advisor") ||
+                                               (manager.getEmployeeId() != null &&
+                                                userMap.values().stream()
+                                                    .filter(user -> manager.getUsername().equals(user.getManagerUsername()))
+                                                    .anyMatch(report -> report.getDistinguishedName() != null &&
+                                                                       report.getDistinguishedName().contains("OU=Branch")));
+
+                    return isBranchFocusedTitle || isFinancialAdvisor;
+                })
+                .map(AppUser::getUsername)
                 .collect(Collectors.toSet());
+        // --- FIX END ---
 
-        // Filter to find users who are both managers AND in a Branch OU
-        List<AppUser> branchLeaders = allUsers.stream()
-                .filter(user -> managerUsernames.contains(user.getUsername()))
-                .filter(user -> user.getDistinguishedName() != null &&
-                               user.getDistinguishedName().contains("OU=Branch"))
-                .toList();
-
-        log.info("Identified {} potential Branch Leaders to query for teams.", branchLeaders.size());
+        log.info("Refined discovery identified {} potential Branch Leaders to query for teams.", branchLeaderUsernames.size());
 
         // For each leader, call the API to find their teams and collect unique IDs
         // Using parallel stream for performance on this network-intensive operation
-        return branchLeaders.parallelStream()
-                .flatMap(leader -> {
+        return branchLeaderUsernames.parallelStream()
+                .flatMap(leaderUsername -> {
                     try {
-                        return crbtApiClient.fetchTeamsForLeader(leader.getUsername()).stream();
+                        return crbtApiClient.fetchTeamsForLeader(leaderUsername).stream();
                     } catch (Exception e) {
-                        log.warn("Failed to fetch teams for leader '{}': {}", leader.getUsername(), e.getMessage());
+                        log.warn("Failed to fetch teams for leader '{}': {}", leaderUsername, e.getMessage());
                         return Stream.empty();
                     }
                 })
@@ -195,13 +227,14 @@ public class ProductionBootstrapService implements ApplicationRunner {
         appUserRepository.saveAll(usersToUpdate);
         log.info("[BOOTSTRAP] PERSIST PHASE (PASS 2): Processed manager links for {} users. {} links were invalid and skipped.", linkedCount, skippedCount);
 
-        // 4. Process and Save Teams (unchanged)
+        // 4. Process and Save Teams (enhanced to include ownerFaNo)
         Set<CrbtTeam> teamsToSave = teamsWithMembers.stream()
             .map(t -> {
                 CrbtTeam team = new CrbtTeam();
                 team.setCrbtId(t.crbtID);
                 team.setTeamName(t.teamName);
                 team.setTeamType(t.teamTyCd);
+                team.setOwnerFaNo(t.ownerFaNo); // Added to support business logic
                 team.setActive(t.tmEndDa == null);
                 return team;
             })

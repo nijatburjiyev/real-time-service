@@ -14,6 +14,7 @@ import org.springframework.stereotype.Service;
 import javax.naming.NamingException;
 import javax.naming.directory.Attributes;
 import java.util.List;
+import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -51,6 +52,31 @@ public class ProductionAdLdapClient implements AdLdapClient {
                 })
                 .distinct() // In case a user somehow exists in multiple OUs
                 .collect(Collectors.toList());
+    }
+
+    @Override
+    public Optional<AppUser> fetchUserByUsername(String username) {
+        log.info("Fetching single user from production AD/LDAP: {}", username);
+        try {
+            // We search all configured bases to find the user
+            for (String base : searchBases) {
+                List<AppUser> users = ldapTemplate.search(
+                    LdapQueryBuilder.query().base(base)
+                        .attributes(REQUESTED_ATTRIBUTES)
+                        .filter("(&(objectclass=user)(sAMAccountName=" + username + "))"),
+                    new UserAttributesMapper()
+                );
+                if (!users.isEmpty()) {
+                    log.info("Found user {} in base: {}", username, base);
+                    return Optional.of(users.get(0));
+                }
+            }
+            log.warn("User {} not found in any search base", username);
+            return Optional.empty();
+        } catch (Exception e) {
+            log.error("Failed to fetch user {} from LDAP", username, e);
+            return Optional.empty();
+        }
     }
 
     private static class UserAttributesMapper implements AttributesMapper<AppUser> {

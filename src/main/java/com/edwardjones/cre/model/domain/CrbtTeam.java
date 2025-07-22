@@ -10,5 +10,6 @@ public class CrbtTeam {
     private Integer crbtId;
     private String teamName;
     private String teamType;
+    private String ownerFaNo; // Added to support business logic for branch leader groups
     private boolean isActive = true;
 }
