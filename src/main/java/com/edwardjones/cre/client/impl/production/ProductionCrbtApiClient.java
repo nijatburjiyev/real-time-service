@@ -53,8 +53,10 @@ public class ProductionCrbtApiClient implements CrbtApiClient {
 
     @Override
     public List<CrbtApiTeamResponse> fetchTeamsForLeader(String pjNumber) {
-        log.debug("CRBT_API: Fetching teams for leader (idType=J): {}", pjNumber);
-        return executeCrbtQuery(pjNumber, "J");
+        // CRITICAL: CRBT API requires UPPERCASE P/J numbers
+        String upperCasePjNumber = pjNumber != null ? pjNumber.toUpperCase() : null;
+        log.debug("CRBT_API: Fetching teams for leader (idType=J): {} (normalized to: {})", pjNumber, upperCasePjNumber);
+        return executeCrbtQuery(upperCasePjNumber, "J");
     }
 
     @Override
@@ -64,24 +66,36 @@ public class ProductionCrbtApiClient implements CrbtApiClient {
     }
 
     private List<CrbtApiTeamResponse> executeCrbtQuery(String id, String idType) {
+        // Additional safety check: ensure PJ numbers are uppercase for CRBT API
+        String normalizedId = id;
+        if ("J".equals(idType) && id != null) {
+            normalizedId = id.toUpperCase();
+        }
+
         String url = UriComponentsBuilder.fromPath("/crt-teams")
                 .queryParam("callingPgm", "CRE-Sync-Service")
-                .queryParam("id", id)
+                .queryParam("id", normalizedId)
                 .queryParam("idType", idType)
                 .queryParam("returnPopulation", "A")
                 .queryParam("returnHistoryCurrent", "C")
                 .toUriString();
 
         try {
+            log.debug("CRBT_API: Making request to: {}", url);
             ResponseEntity<List<CrbtApiTeamResponse>> response = restTemplate.exchange(
                     url,
                     HttpMethod.GET,
                     null,
                     new ParameterizedTypeReference<>() {}
             );
-            return response.getBody() != null ? response.getBody() : Collections.emptyList();
+
+            List<CrbtApiTeamResponse> teams = response.getBody() != null ? response.getBody() : Collections.emptyList();
+            log.debug("CRBT_API: Retrieved {} teams for id='{}', idType='{}'", teams.size(), normalizedId, idType);
+            return teams;
+
         } catch (Exception e) {
-            log.error("CRBT_API: Failed to execute query for id='{}', idType='{}'. Error: {}", id, idType, e.getMessage());
+            log.error("CRBT_API: Failed to execute query for id='{}', idType='{}'. URL: {}. Error: {}",
+                     normalizedId, idType, url, e.getMessage());
             return Collections.emptyList();
         }
     }
