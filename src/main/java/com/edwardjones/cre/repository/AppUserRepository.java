@@ -26,4 +26,12 @@ public interface AppUserRepository extends JpaRepository<AppUser, String> {
      * @return A list of AppUser objects representing the direct reports.
      */
     List<AppUser> findByManagerUsername(String managerUsername);
+
+    /**
+     * Finds all active users.
+     * Used by reconciliation service to get all managed users.
+     *
+     * @return A list of all active AppUser objects.
+     */
+    List<AppUser> findByIsActiveTrue();
 }

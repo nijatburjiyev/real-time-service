@@ -33,6 +33,9 @@ public class AppUser {
     private String country;
     private boolean isActive = true;
 
+    @Column(name = "is_financial_advisor")
+    private boolean isFinancialAdvisor = false; // Default to false
+
     // --- The Recommended Hybrid Manager Relationship ---
     @Column(name = "manager_username")
     private String managerUsername;

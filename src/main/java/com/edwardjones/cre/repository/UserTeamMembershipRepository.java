@@ -29,12 +29,12 @@ public interface UserTeamMembershipRepository extends JpaRepository<UserTeamMemb
     List<UserTeamMembership> findByUserUsername(@Param("username") String username);
 
     /**
-     * Finds all membership records associated with a specific team.
-     * Essential for finding all affected users when a team changes.
+     * Finds all memberships for a specific team.
+     * Used to determine blast radius when a team changes.
      *
-     * @param crbtId The ID of the CRBT team.
-     * @return A list of all memberships for that team.
+     * @param teamId The CRBT team ID.
+     * @return A list of UserTeamMembership objects for that team.
      */
-    @Query("SELECT utm FROM UserTeamMembership utm WHERE utm.id.teamCrbtId = :crbtId")
-    List<UserTeamMembership> findByTeamCrbtId(@Param("crbtId") Integer crbtId);
+    @Query("SELECT utm FROM UserTeamMembership utm WHERE utm.id.teamCrbtId = :teamId")
+    List<UserTeamMembership> findByTeamCrbtId(@Param("teamId") Integer teamId);
 }
