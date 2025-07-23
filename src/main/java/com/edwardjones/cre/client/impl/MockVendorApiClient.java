@@ -8,11 +8,10 @@ import org.springframework.stereotype.Service;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.stream.Collectors;
 
 @Slf4j
 @Service
-@Profile("test")
+@Profile("test | bootstrap-test")
 public class MockVendorApiClient implements VendorApiClient {
 
     private final AtomicInteger updateCount = new AtomicInteger(0);

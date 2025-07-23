@@ -17,7 +17,7 @@ import java.util.List;
 
 @Slf4j
 @Service
-@Profile("!test")
+@Profile("!test & !bootstrap-test")
 public class ProductionVendorApiClient implements VendorApiClient {
 
     private final RestTemplate restTemplate;

@@ -9,6 +9,7 @@ import com.edwardjones.cre.repository.AppUserRepository;
 import com.edwardjones.cre.repository.UserTeamMembershipRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -18,6 +19,7 @@ import java.util.Set;
 @Service
 @RequiredArgsConstructor
 @Slf4j
+@ConditionalOnProperty(name = "spring.kafka.listener.auto-startup", havingValue = "true", matchIfMissing = true)
 public class KafkaListenerService {
 
     private final AppUserRepository appUserRepository;

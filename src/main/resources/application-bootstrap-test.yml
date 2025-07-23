@@ -1,0 +1,28 @@
+# Configuration for local bootstrap testing against production data sources
+
+spring:
+  # Enable the H2 database console so we can inspect the data
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+
+  # Point to a dedicated database file for this test run
+  datasource:
+    url: jdbc:h2:file:./data/bootstrap_test_db;AUTO_SERVER=TRUE
+
+  # Disable Kafka listeners from starting
+  kafka:
+    listener:
+      auto-startup: false
+
+# Custom property to disable the reconciliation job
+app:
+  reconciliation:
+    enabled: false
+
+# Set logging to DEBUG for our application packages to see detailed bootstrap progress
+logging:
+  level:
+    com.edwardjones.cre: DEBUG
+    org.springframework.transaction: DEBUG # Useful to see transaction boundaries
