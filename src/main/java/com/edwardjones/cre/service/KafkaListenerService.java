@@ -1,6 +1,7 @@
 package com.edwardjones.cre.service;
 
 import com.edwardjones.cre.client.VendorApiClient;
+import com.edwardjones.cre.model.domain.AppUser;
 import com.edwardjones.cre.model.dto.AdChangeEvent;
 import com.edwardjones.cre.model.dto.CrtChangeEvent;
 import com.edwardjones.cre.model.dto.DesiredConfiguration;
@@ -27,33 +28,67 @@ public class KafkaListenerService {
     @KafkaListener(topics = "${app.kafka.topics.ad-changes}", groupId = "compliance-sync")
     @Transactional
     public void consumeAdChanges(AdChangeEvent event) {
-        log.info("Processing AD change for user: {}", event.getPjNumber());
+        String username = event.getPjNumber();
+        log.info("Processing AD change event for user: {}", username);
 
-        appUserRepository.findById(event.getPjNumber()).ifPresent(user -> {
-            // Apply change to user entity...
-            appUserRepository.save(user);
-        });
+        try {
+            // Step 1: Update State
+            if ("TerminatedUser".equalsIgnoreCase(event.getChangeType())) {
+                appUserRepository.findById(username).ifPresent(user -> {
+                    user.setActive(false);
+                    appUserRepository.save(user);
+                });
+            } else {
+                // For new users or data changes, update or create the user record
+                AppUser user = appUserRepository.findById(username).orElse(new AppUser());
+                user.setUsername(username);
+                // Apply the specific change from the event
+                applyAdChangeToUser(user, event);
+                appUserRepository.save(user);
+            }
 
-        Set<String> affectedUsers = new HashSet<>();
-        affectedUsers.add(event.getPjNumber());
-        appUserRepository.findByManagerUsername(event.getPjNumber())
-            .forEach(report -> affectedUsers.add(report.getUsername()));
+            // Step 2: Determine Blast Radius
+            Set<String> affectedUsers = new HashSet<>();
+            affectedUsers.add(username);
+            if (event.isManagerialChange()) {
+                appUserRepository.findByManagerUsername(username)
+                    .forEach(report -> affectedUsers.add(report.getUsername()));
+            }
 
-        processAffectedUsers(affectedUsers);
+            // Step 3: Process and Push
+            processAffectedUsers(affectedUsers);
+
+        } catch (Exception e) {
+            log.error("Failed to process AD change event for user: {}", username, e);
+            throw e; // Re-throw to trigger Kafka retry mechanism
+        }
     }
 
     @KafkaListener(topics = "${app.kafka.topics.crt-changes}", groupId = "compliance-sync")
     @Transactional
     public void consumeCrtChanges(CrtChangeEvent event) {
-        log.info("Processing CRT change for team: {}", event.getCrbtId());
+        Integer teamId = event.getCrbtId();
+        log.info("Processing CRT change for team: {}", teamId);
 
-        // In a real implementation, you would update the team and membership tables here.
+        try {
+            // Step 1: Update State
+            // This is where you would add logic to update the CrbtTeam and UserTeamMembership tables
+            // For example, if a member is leaving, you would delete the membership record.
+            // If a new member is added, you would create a new membership record.
+            log.warn("CRT change state update logic is a placeholder and needs to be fully implemented.");
 
-        Set<String> affectedUsers = new HashSet<>();
-        userTeamMembershipRepository.findByTeamCrbtId(event.getCrbtId())
-            .forEach(membership -> affectedUsers.add(membership.getUser().getUsername()));
+            // Step 2: Determine Blast Radius
+            Set<String> affectedUsers = new HashSet<>();
+            userTeamMembershipRepository.findByTeamCrbtId(teamId)
+                .forEach(membership -> affectedUsers.add(membership.getUser().getUsername()));
 
-        processAffectedUsers(affectedUsers);
+            // Step 3: Process and Push
+            processAffectedUsers(affectedUsers);
+
+        } catch (Exception e) {
+            log.error("Failed to process CRT change event for team: {}", teamId, e);
+            throw e;
+        }
     }
 
     private void processAffectedUsers(Set<String> usernames) {
@@ -64,6 +99,24 @@ public class KafkaListenerService {
             } catch (Exception e) {
                 log.error("Failed to process update for user {}. Will be corrected by reconciliation.", username, e);
             }
+        }
+    }
+
+    private void applyAdChangeToUser(AppUser user, AdChangeEvent event) {
+        String property = event.getProperty();
+        String newValue = event.getNewValue();
+
+        if (property == null) return;
+
+        switch (property) {
+            case AdChangeEvent.PROPERTY_TITLE -> user.setTitle(newValue);
+            case AdChangeEvent.PROPERTY_MANAGER -> user.setManagerUsername(newValue); // Assuming newValue is the PJ number
+            case AdChangeEvent.PROPERTY_DISTINGUISHED_NAME -> user.setDistinguishedName(newValue);
+            case AdChangeEvent.PROPERTY_EJ_IR_NUMBER -> user.setEmployeeId(newValue);
+            case AdChangeEvent.PROPERTY_STATE -> user.setCountry(newValue);
+            case AdChangeEvent.PROPERTY_ENABLED -> user.setActive(Boolean.parseBoolean(newValue));
+            // Add other impactful properties here as needed
+            default -> log.debug("Unhandled property change: {} for user: {}", property, user.getUsername());
         }
     }
 }

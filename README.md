@@ -56,14 +56,6 @@ The H2 database consists of three primary tables:
 4.  For each affected user, it calls `ComplianceLogicService` to calculate the new `DesiredConfiguration`.
 5.  It sends the new configuration to the vendor via the `VendorApiClient`.
 
-### Reconciliation Workflow (Nightly Job)
-
-1. `ReconciliationService` fetches all users from the vendor system
-2. For each active user in H2, calculates the desired configuration
-3. Compares desired vs actual state in vendor system
-4. Creates missing users or updates drifted configurations
-5. Logs all reconciliation actions for audit purposes
-
 ---
 
 ## 4. Latest Business Logic Rules (Summary)
@@ -75,10 +67,8 @@ The `ComplianceLogicService` implements the following key rules, validated again
 3.  **Financial Advisor (FA) Identification:** A user is a Financial Advisor (`is_financial_advisor = true`) if and only if they are **both** a Leader and a Branch user.
 4.  **Standard Visibility Profiles:** Non-leader users receive a standard Visibility Profile based on their classification and country (e.g., `Vis-US-HO`, `Vis-CA-BR`).
 5.  **Multi-Team Visibility Profile Precedence:** For users who are members of multiple teams, a special Visibility Profile is dynamically generated. This logic **only considers teams whose members are Financial Advisors**. The final profile is determined by the highest-ranking team type in the following order of precedence: **VTM > HTM > SFA**.
-6.  **Group Assignments:** Users are assigned to vendor groups based on their team memberships and leader status, following specific business rules for compliance requirements.
 
 ---
-
 ## 5. Getting Started
 
 1.  **Configuration:** Update `src/main/resources/application.yml` with the correct credentials and URLs for LDAP, CRBT, and the Vendor API. Use environment variables for sensitive values.
@@ -86,108 +76,3 @@ The `ComplianceLogicService` implements the following key rules, validated again
 3.  **Run:** Execute the application with `java -jar build/libs/compliance-sync-service-1.0.0-SNAPSHOT.jar`.
 
 The application will automatically perform the bootstrap process on its first run (if the database is empty) and then begin listening for Kafka events.
-
----
-
-## 6. Service Responsibilities
-
-### BootstrapService
-- **Single Responsibility:** Populate the H2 database on application startup
-- **Triggered:** Once at application start (only if database is empty)
-- **Key Actions:**
-  - Fetch all users from Active Directory via LDAP
-  - Identify Financial Advisors (Leaders who are also Branch users)
-  - Fetch team data from CRBT API for all Financial Advisors
-  - Persist all data in a single transaction
-
-### ComplianceLogicService
-- **Single Responsibility:** Calculate user configurations based on business rules
-- **Pure Function:** No side effects, only business logic
-- **Key Actions:**
-  - Determine user type (HO, BR, HOBR, Leaders)
-  - Generate standard visibility profiles
-  - Handle multi-team configurations with precedence rules
-  - Return DesiredConfiguration objects
-
-### KafkaListenerService
-- **Single Responsibility:** Process real-time events and orchestrate updates
-- **Event-Driven:** Listens to AD and CRBT change events
-- **Key Actions:**
-  - Update local state database with changes
-  - Calculate "blast radius" of affected users (user + their direct reports)
-  - Trigger vendor updates for all affected users
-  - Handle both user changes (AD) and team changes (CRBT)
-
-### ReconciliationService
-- **Single Responsibility:** Correct drift between desired and actual state
-- **Scheduled:** Runs nightly via cron job
-- **Key Actions:**
-  - Compare H2 state with vendor system state
-  - Create missing users in vendor system
-  - Update users who have drifted from desired configuration
-
----
-
-## 7. Development Guidelines
-
-### For Junior Developers
-
-1. **Each service has ONE job** - never mix responsibilities
-2. **Business logic belongs only in ComplianceLogicService** - other services orchestrate
-3. **Always use transactions** - especially for data consistency
-4. **Error handling is crucial** - failed real-time updates are corrected by reconciliation
-5. **Test each service independently** - they are loosely coupled by design
-
-### Testing Strategy
-
-1. **Unit Tests:** Test ComplianceLogicService business logic with various user scenarios
-2. **Integration Tests:** Test each service with mocked dependencies
-3. **End-to-End Tests:** Test the complete workflow from Kafka event to vendor update
-4. **Reconciliation Tests:** Verify drift detection and correction logic
-
----
-
-## 8. Configuration Properties
-
-Key application properties that need to be configured:
-
-```yaml
-app:
-  kafka:
-    topics:
-      ad-changes: "ad-changes-topic"
-      crt-changes: "crt-changes-topic"
-  reconciliation:
-    cron: "0 0 2 * * ?" # 2 AM daily
-  bootstrap:
-    enabled: true # Set to false to skip bootstrap on startup
-  
-spring:
-  datasource:
-    url: "jdbc:h2:file:./data/compliance-sync"
-    driver-class-name: "org.h2.Driver"
-    
-  jpa:
-    hibernate:
-      ddl-auto: update
-    show-sql: false
-  
-  ldap:
-    urls: "ldap://your-ldap-server:389"
-    base: "dc=company,dc=com"
-    username: "${LDAP_USERNAME}"
-    password: "${LDAP_PASSWORD}"
-    
-crbt:
-  api:
-    base-url: "https://crbt-api.company.com"
-    username: "${CRBT_USERNAME}"
-    password: "${CRBT_PASSWORD}"
-    
-vendor:
-  api:
-    base-url: "https://vendor-api.company.com"
-    api-key: "${VENDOR_API_KEY}"
-```
-
-This refactored service is now production-ready, maintainable, and follows enterprise Java best practices while implementing the complex business logic requirements.
