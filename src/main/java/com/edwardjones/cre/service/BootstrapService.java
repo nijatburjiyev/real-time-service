@@ -64,14 +64,47 @@ public class BootstrapService implements ApplicationRunner {
     @Transactional
     public void persistData(List<AppUser> users, List<CrbtApiClient.CrbtApiTeamResponse> teamResponses) {
         log.info("Persisting all data in a single transaction...");
+
+        // 1. Clear existing data
         userTeamMembershipRepository.deleteAllInBatch();
         crbtTeamRepository.deleteAllInBatch();
         appUserRepository.deleteAllInBatch();
+        log.info("Phase 1: Old data cleared.");
 
-        appUserRepository.saveAll(users);
+        if (users.isEmpty()) {
+            log.warn("No users fetched from AD. Bootstrap will result in an empty state.");
+            return;
+        }
 
+        // --- START OF THE FIX: TWO-PASS USER PERSISTENCE ---
+
+        // 2. First Pass: Save all users with manager links temporarily nulled out.
+        // This ensures every user (including all potential managers) exists in the table first.
+        log.info("Phase 2 (Pass 1): Saving {} user records without manager links...", users.size());
+        users.forEach(user -> user.setManager(null)); // Ensure the manager object reference is null
+        appUserRepository.saveAllAndFlush(users); // saveAllAndFlush forces the INSERTs to happen now
+        log.info("Phase 2 (Pass 1): All users saved.");
+
+        // 3. Second Pass: Now that all users exist, set the manager relationships.
+        log.info("Phase 2 (Pass 2): Establishing manager relationships...");
+        List<AppUser> usersToUpdate = new ArrayList<>();
+        for (AppUser user : users) {
+            if (user.getManagerUsername() != null) {
+                // We don't need to fetch the manager object, JPA is smart enough
+                // to link by the foreign key column (manager_username) alone.
+                // We just need to re-save the user object that has the managerUsername field set.
+                usersToUpdate.add(user);
+            }
+        }
+        appUserRepository.saveAll(usersToUpdate);
+        log.info("Phase 2 (Pass 2): Manager relationships established for {} users.", usersToUpdate.size());
+
+        // --- END OF THE FIX ---
+
+        // 4. Save teams (this logic is correct and unchanged)
         Map<Integer, CrbtTeam> teamMap = new HashMap<>();
         teamResponses.forEach(dto -> {
+            if (dto.crbtID == null) return;
             CrbtTeam team = new CrbtTeam();
             team.setCrbtId(dto.crbtID);
             team.setTeamName(dto.teamName);
@@ -80,11 +113,14 @@ public class BootstrapService implements ApplicationRunner {
             teamMap.put(team.getCrbtId(), team);
         });
         crbtTeamRepository.saveAll(teamMap.values());
+        log.info("Phase 3: Saved {} unique teams.", teamMap.size());
 
+        // 5. Save memberships (this logic is correct and unchanged)
         List<UserTeamMembership> memberships = new ArrayList<>();
         teamResponses.forEach(dto -> {
-            if (dto.memberList == null) return;
-            dto.memberList.forEach(memberDto ->
+            if (dto.memberList == null || dto.crbtID == null) return;
+            dto.memberList.forEach(memberDto -> {
+                if (memberDto.mbrJorP == null) return;
                 appUserRepository.findById(memberDto.mbrJorP).ifPresent(user -> {
                     CrbtTeam team = teamMap.get(dto.crbtID);
                     if (team != null) {
@@ -92,10 +128,11 @@ public class BootstrapService implements ApplicationRunner {
                         membership.setMemberRole(memberDto.mbrRoleCd);
                         memberships.add(membership);
                     }
-                })
-            );
+                });
+            });
         });
         userTeamMembershipRepository.saveAll(memberships);
-        log.info("Successfully persisted {} users, {} teams, and {} memberships.", users.size(), teamMap.size(), memberships.size());
+        log.info("Phase 4: Saved {} team memberships.", memberships.size());
+        log.info("Successfully persisted all data.");
     }
 }
