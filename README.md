@@ -69,10 +69,74 @@ The `ComplianceLogicService` implements the following key rules, validated again
 5.  **Multi-Team Visibility Profile Precedence:** For users who are members of multiple teams, a special Visibility Profile is dynamically generated. This logic **only considers teams whose members are Financial Advisors**. The final profile is determined by the highest-ranking team type in the following order of precedence: **VTM > HTM > SFA**.
 
 ---
-## 5. Getting Started
+
+## 5. Bootstrap Test Configuration
+
+For safe testing against production data sources, use the `bootstrap-test` profile:
+
+### Quick Setup
+1. Create run configuration in IntelliJ with active profile: `bootstrap-test`
+2. Add environment variables for production credentials:
+   ```
+   LDAP_USERNAME=your-ldap-service-account-dn
+   LDAP_PASSWORD=your-ldap-service-account-password
+   CRBT_EJAUTH_TOKEN=your-production-ejauth-token
+   CRBT_EJPKY_TOKEN=your-production-ejpky-token
+   ```
+
+### What This Does
+- ✅ Connects to production LDAP and CRBT APIs
+- ✅ Runs full bootstrap process
+- ✅ Uses mock vendor client (no real vendor calls)
+- ✅ Disables Kafka listeners and reconciliation
+- ✅ Stores data in dedicated test database: `./data/bootstrap_test_db`
+- ✅ Enables H2 console at `http://localhost:8080/h2-console`
+
+### Verification Queries
+```sql
+-- Check record counts
+SELECT 'APP_USER' as "Table", COUNT(*) as "Count" FROM APP_USER
+UNION ALL
+SELECT 'CRBT_TEAM', COUNT(*) FROM CRBT_TEAM
+UNION ALL
+SELECT 'USER_TEAM_MEMBERSHIP', COUNT(*) FROM USER_TEAM_MEMBERSHIP;
+
+-- Verify Financial Advisors
+SELECT USERNAME, FIRST_NAME, LAST_NAME, TITLE 
+FROM APP_USER 
+WHERE IS_FINANCIAL_ADVISOR = TRUE 
+LIMIT 10;
+```
+
+---
+
+## 6. Getting Started
 
 1.  **Configuration:** Update `src/main/resources/application.yml` with the correct credentials and URLs for LDAP, CRBT, and the Vendor API. Use environment variables for sensitive values.
 2.  **Build:** From the project root, run `./gradlew build`.
 3.  **Run:** Execute the application with `java -jar build/libs/compliance-sync-service-1.0.0-SNAPSHOT.jar`.
 
 The application will automatically perform the bootstrap process on its first run (if the database is empty) and then begin listening for Kafka events.
+
+---
+
+## 7. Data Modeling Explanation
+
+### What is Data Modeling?
+
+Think of data modeling like creating a blueprint for organizing information, similar to planning a LEGO construction:
+
+- **Individual Pieces**: Each piece of data (user's name, team ID, manager relationship)
+- **Blueprint**: How these pieces connect and relate to each other
+- **Final Structure**: A logical, efficient way to store and retrieve information
+
+### Our Three-Table Design
+
+1. **`APP_USER` (The Person)**: Stores individual user information with a special connection field (`manager_username`) that links to their manager
+2. **`CRBT_TEAM` (The Car)**: Stores team information independently  
+3. **`USER_TEAM_MEMBERSHIP` (The Passenger List)**: A connecting table that links users to teams, allowing many-to-many relationships
+
+This design elegantly handles complex questions like:
+- "Who reports to this manager?" 
+- "What teams is this user in?"
+- "Who are the members of this team?"

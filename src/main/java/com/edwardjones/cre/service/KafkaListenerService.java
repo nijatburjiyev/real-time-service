@@ -117,6 +117,8 @@ public class KafkaListenerService {
             case AdChangeEvent.PROPERTY_EJ_IR_NUMBER -> user.setEmployeeId(newValue);
             case AdChangeEvent.PROPERTY_STATE -> user.setCountry(newValue);
             case AdChangeEvent.PROPERTY_ENABLED -> user.setActive(Boolean.parseBoolean(newValue));
+            case "givenName" -> user.setFirstName(newValue);
+            case "sn" -> user.setLastName(newValue);
             // Add other impactful properties here as needed
             default -> log.debug("Unhandled property change: {} for user: {}", property, user.getUsername());
         }
