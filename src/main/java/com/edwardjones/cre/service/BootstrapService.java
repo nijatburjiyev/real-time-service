@@ -76,30 +76,39 @@ public class BootstrapService implements ApplicationRunner {
             return;
         }
 
-        // --- START OF THE FIX: TWO-PASS USER PERSISTENCE ---
+        // --- START OF THE DEFINITIVE FIX: TWO-PASS USER PERSISTENCE ---
 
-        // 2. First Pass: Save all users with manager links temporarily nulled out.
-        // This ensures every user (including all potential managers) exists in the table first.
+        // 2. First Pass: Save all users with manager links COMPLETELY removed.
         log.info("Phase 2 (Pass 1): Saving {} user records without manager links...", users.size());
-        users.forEach(user -> user.setManager(null)); // Ensure the manager object reference is null
-        appUserRepository.saveAllAndFlush(users); // saveAllAndFlush forces the INSERTs to happen now
-        log.info("Phase 2 (Pass 1): All users saved.");
 
-        // 3. Second Pass: Now that all users exist, set the manager relationships.
+        // Temporarily store the manager links in memory
+        Map<String, String> managerLinks = new HashMap<>();
+        users.forEach(user -> {
+            if (user.getManagerUsername() != null) {
+                managerLinks.put(user.getUsername(), user.getManagerUsername());
+                user.setManagerUsername(null); // <-- CRITICAL: Explicitly nullify the FK field
+            }
+        });
+
+        appUserRepository.saveAllAndFlush(users);
+        log.info("Phase 2 (Pass 1): All users saved without manager links.");
+
+        // 3. Second Pass: Now that all users exist, re-apply the manager links.
         log.info("Phase 2 (Pass 2): Establishing manager relationships...");
         List<AppUser> usersToUpdate = new ArrayList<>();
-        for (AppUser user : users) {
-            if (user.getManagerUsername() != null) {
-                // We don't need to fetch the manager object, JPA is smart enough
-                // to link by the foreign key column (manager_username) alone.
-                // We just need to re-save the user object that has the managerUsername field set.
+        managerLinks.forEach((username, managerUsername) -> {
+            // Find the user we just saved
+            appUserRepository.findById(username).ifPresent(user -> {
+                // Set the manager username back to its original value
+                user.setManagerUsername(managerUsername);
                 usersToUpdate.add(user);
-            }
-        }
+            });
+        });
+
         appUserRepository.saveAll(usersToUpdate);
         log.info("Phase 2 (Pass 2): Manager relationships established for {} users.", usersToUpdate.size());
 
-        // --- END OF THE FIX ---
+        // --- END OF THE DEFINITIVE FIX ---
 
         // 4. Save teams (this logic is correct and unchanged)
         Map<Integer, CrbtTeam> teamMap = new HashMap<>();
