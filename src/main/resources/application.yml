@@ -11,7 +11,11 @@ spring:
     database-platform: org.hibernate.dialect.H2Dialect
     hibernate:
       ddl-auto: update # Creates/updates the schema on startup
-    show-sql: false # Disable noisy SQL logging
+    show-sql: true    # Enable SQL logging for debugging
+    properties:
+      hibernate:
+        format_sql: true    # Pretty-print SQL statements
+        use_sql_comments: true  # Add comments to SQL for context
   # Kafka Configuration
   kafka:
     bootstrap-servers: localhost:9092 # Change to your Kafka broker
@@ -29,12 +33,13 @@ logging:
     root: INFO
 
     # Bootstrap-specific logging - KEEP THESE for debugging data issues
-    com.edwardjones.cre.service.bootstrap: DEBUG
+    com.edwardjones.cre.service.BootstrapService: DEBUG
     com.edwardjones.cre.client: INFO  # API calls and responses
 
-    # Database/JPA - Only errors and warnings for data integrity issues
-    org.hibernate: WARN
-    org.hibernate.SQL: ERROR  # Only show SQL errors, not all queries
+    # Database/JPA debugging - Enable these for hierarchical data troubleshooting
+    org.hibernate.SQL: DEBUG          # Show raw SQL statements
+    org.hibernate.type.descriptor.sql.BasicBinder: TRACE  # Show bind parameters
+    org.springframework.jdbc.core.JdbcTemplate: TRACE     # Spring JDBC operations
     org.hibernate.engine.jdbc.spi.SqlExceptionHelper: ERROR
     org.springframework.orm.jpa: WARN
     org.springframework.transaction: WARN

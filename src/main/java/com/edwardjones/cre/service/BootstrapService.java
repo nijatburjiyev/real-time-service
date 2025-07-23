@@ -12,6 +12,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import java.util.*;
@@ -36,7 +37,17 @@ public class BootstrapService implements ApplicationRunner {
         }
         log.info("Starting bootstrap process...");
 
+        // Phase 1: Fetch all data from external sources
         List<AppUser> usersFromAd = adLdapClient.fetchAllUsers();
+
+        // Diagnostic Log: Verify the input data from LDAP
+        long uniqueManagerCount = usersFromAd.stream()
+                .map(AppUser::getManagerUsername)
+                .filter(Objects::nonNull)
+                .distinct()
+                .count();
+        log.info("Bootstrap input size: {} users received from LDAP ({} unique manager links)",
+                usersFromAd.size(), uniqueManagerCount);
 
         Set<String> leaderUsernames = usersFromAd.stream()
             .map(AppUser::getManagerUsername)
@@ -76,33 +87,42 @@ public class BootstrapService implements ApplicationRunner {
             return;
         }
 
-        // --- START OF THE DEFINITIVE FIX: TWO-PASS USER PERSISTENCE ---
+        // --- START OF THE DEFINITIVE FIX WITH DIAGNOSTICS ---
 
         // 2. First Pass: Save all users with manager links COMPLETELY removed.
-        log.info("Phase 2 (Pass 1): Saving {} user records without manager links...", users.size());
-
-        // Temporarily store the manager links in memory
         Map<String, String> managerLinks = new HashMap<>();
         users.forEach(user -> {
             if (user.getManagerUsername() != null) {
                 managerLinks.put(user.getUsername(), user.getManagerUsername());
-                user.setManagerUsername(null); // <-- CRITICAL: Explicitly nullify the FK field
+                user.setManagerUsername(null);
             }
         });
-
         appUserRepository.saveAllAndFlush(users);
-        log.info("Phase 2 (Pass 1): All users saved without manager links.");
+        log.info("Phase 2 (Pass 1): All {} users saved without manager links.", users.size());
 
-        // 3. Second Pass: Now that all users exist, re-apply the manager links.
+        // 3. Pre-flight Validation: Before Pass 2, find any managers who don't exist.
+        Set<String> allUsernamesInDb = users.stream().map(AppUser::getUsername).collect(Collectors.toSet());
+        Set<String> missingManagers = managerLinks.values().stream()
+            .filter(manager -> !allUsernamesInDb.contains(manager))
+            .collect(Collectors.toSet());
+
+        if (!missingManagers.isEmpty()) {
+            log.warn("[DATA INTEGRITY ISSUE] Found {} manager usernames that do not correspond to any user in the LDAP data pull. These links will be ignored: {}",
+                missingManagers.size(), missingManagers);
+        }
+
+        // 4. Second Pass: Re-apply only the VALID manager links.
         log.info("Phase 2 (Pass 2): Establishing manager relationships...");
         List<AppUser> usersToUpdate = new ArrayList<>();
         managerLinks.forEach((username, managerUsername) -> {
-            // Find the user we just saved
-            appUserRepository.findById(username).ifPresent(user -> {
-                // Set the manager username back to its original value
-                user.setManagerUsername(managerUsername);
-                usersToUpdate.add(user);
-            });
+            // Only link if the manager is valid
+            if (!missingManagers.contains(managerUsername)) {
+                appUserRepository.findById(username).ifPresent(user -> {
+                    log.debug("Linking manager={} -> employee={}", managerUsername, username);
+                    user.setManagerUsername(managerUsername);
+                    usersToUpdate.add(user);
+                });
+            }
         });
 
         appUserRepository.saveAll(usersToUpdate);
