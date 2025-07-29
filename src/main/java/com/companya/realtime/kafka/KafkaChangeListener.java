@@ -1,6 +1,6 @@
 package com.companya.realtime.kafka;
 
-import com.companya.realtime.integration.VendorClient;
+import com.companya.realtime.integration.VendorIntegrationService;
 import com.companya.realtime.service.RecordService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -13,15 +13,15 @@ import org.springframework.stereotype.Component;
 public class KafkaChangeListener {
 
     private final RecordService recordService;
-    private final VendorClient vendorClient;
+    private final VendorIntegrationService vendorService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    public KafkaChangeListener(RecordService recordService, VendorClient vendorClient) {
+    public KafkaChangeListener(RecordService recordService, VendorIntegrationService vendorService) {
         this.recordService = recordService;
-        this.vendorClient = vendorClient;
+        this.vendorService = vendorService;
     }
 
-    @KafkaListener(topics = "changes", groupId = "realtime-service")
+    @KafkaListener(id = "changesListener", topics = "changes", groupId = "realtime-service")
     public void consume(ConsumerRecord<String, String> record) {
         String key = record.key();
         String payload = record.value();
@@ -58,11 +58,11 @@ public class KafkaChangeListener {
         switch (event.eventType()) {
             case TEAMCREATE, TEAMUPDATE, MEMBERCREATE, MEMBERUPDATE -> {
                 recordService.upsert(event.key(), event.payload().toString());
-                vendorClient.sendUpdate(event.payload().toString());
+                vendorService.send(event.payload().toString());
             }
             case TEAMEND, MEMBEREND -> {
                 recordService.delete(event.key());
-                vendorClient.sendUpdate(event.payload().toString());
+                vendorService.send(event.payload().toString());
             }
         }
     }

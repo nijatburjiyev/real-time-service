@@ -14,3 +14,6 @@ spring:
     consumer:
       bootstrap-servers: localhost:9092
       group-id: realtime-service
+vendor:
+  api:
+    base-url: https://vendor.example/api
