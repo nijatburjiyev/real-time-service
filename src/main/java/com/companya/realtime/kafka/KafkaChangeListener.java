@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.header.Header;
 import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -21,8 +22,8 @@ public class KafkaChangeListener {
         this.vendorService = vendorService;
     }
 
-    @KafkaListener(id = "changesListener", topics = "changes", groupId = "realtime-service")
-    public void consume(ConsumerRecord<String, String> record) {
+    @KafkaListener(id = "changesListener", topics = "changes", groupId = "realtime-service", containerFactory = "manualAckContainerFactory")
+    public void consume(ConsumerRecord<String, String> record, Acknowledgment ack) {
         String key = record.key();
         String payload = record.value();
 
@@ -40,6 +41,7 @@ public class KafkaChangeListener {
 
         KafkaEvent event = new KafkaEvent(key, eventType, jsonPayload);
         handleEvent(event);
+        ack.acknowledge();
     }
 
     private String getHeader(ConsumerRecord<String, String> record, String key) {
@@ -58,11 +60,11 @@ public class KafkaChangeListener {
         switch (event.eventType()) {
             case TEAMCREATE, TEAMUPDATE, MEMBERCREATE, MEMBERUPDATE -> {
                 recordService.upsert(event.key(), event.payload().toString());
-                vendorService.send(event.payload().toString());
+                vendorService.processPayload(event.payload().toString());
             }
             case TEAMEND, MEMBEREND -> {
                 recordService.delete(event.key());
-                vendorService.send(event.payload().toString());
+                vendorService.processPayload(event.payload().toString());
             }
         }
     }

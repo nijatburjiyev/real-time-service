@@ -1,12 +1,12 @@
 package com.companya.realtime.integration;
 
+import com.companya.realtime.model.OutboundEvent;
+import com.companya.realtime.repository.OutboundEventRepository;
 import org.springframework.kafka.config.KafkaListenerEndpointRegistry;
 import org.springframework.kafka.listener.MessageListenerContainer;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
-import java.util.Queue;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 @Service
@@ -14,40 +14,48 @@ public class VendorIntegrationService {
 
     private final VendorClient vendorClient;
     private final KafkaListenerEndpointRegistry registry;
-    private final Queue<String> queue = new ConcurrentLinkedQueue<>();
+    private final OutboundEventRepository repository;
     private final AtomicBoolean consumerPaused = new AtomicBoolean(false);
 
-    public VendorIntegrationService(VendorClient vendorClient, KafkaListenerEndpointRegistry registry) {
+    public VendorIntegrationService(VendorClient vendorClient,
+                                    KafkaListenerEndpointRegistry registry,
+                                    OutboundEventRepository repository) {
         this.vendorClient = vendorClient;
         this.registry = registry;
+        this.repository = repository;
     }
 
-    public void send(String payload) {
-        if (!queue.isEmpty()) {
-            queue.add(payload);
-            return;
-        }
-        try {
-            vendorClient.sendUpdate(payload);
-        } catch (Exception ex) {
-            queue.add(payload);
-            pauseConsumer();
-        }
+    /**
+     * Persist the payload as a pending outbound event and attempt immediate send.
+     */
+    public void processPayload(String payload) {
+        OutboundEvent event = repository.save(new OutboundEvent(payload));
+        trySend(event);
     }
 
+    /**
+     * Periodically attempt to send any pending events.
+     */
     @Scheduled(fixedDelay = 30000)
-    public void flushQueue() {
-        while (!queue.isEmpty()) {
-            String payload = queue.peek();
-            try {
-                vendorClient.sendUpdate(payload);
-                queue.remove();
-            } catch (Exception ex) {
-                pauseConsumer();
+    public void flushPending() {
+        for (OutboundEvent event : repository.findByStatus(OutboundEvent.Status.PENDING)) {
+            if (!trySend(event)) {
                 return;
             }
         }
         resumeConsumer();
+    }
+
+    private boolean trySend(OutboundEvent event) {
+        try {
+            vendorClient.sendUpdate(event.getPayload());
+            event.setStatus(OutboundEvent.Status.SENT);
+            repository.save(event);
+            return true;
+        } catch (Exception ex) {
+            pauseConsumer();
+            return false;
+        }
     }
 
     private void pauseConsumer() {
