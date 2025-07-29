@@ -23,4 +23,10 @@ public class RecordService {
                 })
                 .orElseGet(() -> recordRepository.save(new Record(externalId, payload)));
     }
+
+    @Transactional
+    public void delete(String externalId) {
+        recordRepository.findByExternalId(externalId)
+                .ifPresent(recordRepository::delete);
+    }
 }
