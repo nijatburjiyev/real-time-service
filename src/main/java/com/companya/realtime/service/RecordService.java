@@ -2,6 +2,8 @@ package com.companya.realtime.service;
 
 import com.companya.realtime.model.Record;
 import com.companya.realtime.repository.RecordRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -9,6 +11,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class RecordService {
 
     private final RecordRepository recordRepository;
+    private static final Logger log = LoggerFactory.getLogger(RecordService.class);
 
     public RecordService(RecordRepository recordRepository) {
         this.recordRepository = recordRepository;
@@ -16,6 +19,7 @@ public class RecordService {
 
     @Transactional
     public Record upsert(String externalId, String payload) {
+        log.info("Upserting record {}", externalId);
         return recordRepository.findByExternalId(externalId)
                 .map(existing -> {
                     existing.setPayload(payload);
@@ -27,6 +31,9 @@ public class RecordService {
     @Transactional
     public void delete(String externalId) {
         recordRepository.findByExternalId(externalId)
-                .ifPresent(recordRepository::delete);
+                .ifPresent(record -> {
+                    log.info("Deleting record {}", externalId);
+                    recordRepository.delete(record);
+                });
     }
 }
