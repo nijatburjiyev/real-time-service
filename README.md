@@ -24,6 +24,7 @@ The service is built on Spring Boot and uses the following modules:
 - **RecordService** – stores updates in the `Record` table via Spring Data JPA.
 - **VendorClient** – wraps a `RestTemplate` with Resilience4j rate limiting and a circuit breaker. It allows up to 20 requests per minute and temporarily stops calls when the vendor API is failing.
 - **VendorIntegrationService** – persists outbound payloads as `OutboundEvent` entities and attempts to send them through `VendorClient`. When the vendor API cannot be reached it pauses the Kafka consumer and periodically retries sending queued events.
+- **Logging** – SLF4J loggers across the components provide insight into processing and failures.
 - **Jobs** – `DailyCsvSyncJob` and `UiDriftCorrectionJob` are scheduled placeholders for daily CSV imports and nightly reconciliation with the UI.
 - **Configuration** – `KafkaManualAckConfig` creates a custom listener container factory enabling manual acknowledgments.
 
@@ -41,9 +42,13 @@ This approach ensures that even if the application crashes after persisting an o
 
 ## Edge Cases and Resilience
 
+- **Poison messages** – malformed JSON is acknowledged and skipped so it cannot repeatedly fail processing.
 - **Vendor API outage** – Failures trigger the Resilience4j circuit breaker and pause the Kafka consumer. The retry loop waits one minute (circuit breaker open state) before attempting to send again.
 - **Application crash** – Because manual acks occur only after saving the outbound event, a crash may lead to the Kafka message being reprocessed. This creates a duplicate `OutboundEvent` but prevents data loss.
+- **Database-first approach** – Records are persisted before contacting the vendor ensuring local state is updated even when vendor calls fail.
 - **High throughput** – With the 20 req/min rate limit, a prolonged vendor outage or a spike in Kafka messages can create a large backlog of `OutboundEvent` rows. They are stored on disk so processing continues when the vendor API recovers.
+- **Vendor failures don't block processing** – Outbound events are stored and retried while Kafka continues acknowledging messages.
+- **Visibility** – Logging statements throughout the service provide insights into message handling and retry behavior.
 - **Database failures** – If the H2 database becomes unavailable, message processing will fail before acknowledgment and Kafka will redeliver the record. The application relies on the underlying database to recover.
 - **Multiple service instances** – The current implementation assumes a single Kafka consumer instance. Running multiple instances would require coordination for pausing/resuming and for processing the same outbound events.
 

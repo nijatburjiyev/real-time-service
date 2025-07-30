@@ -2,6 +2,8 @@ package com.companya.realtime.integration;
 
 import com.companya.realtime.model.OutboundEvent;
 import com.companya.realtime.repository.OutboundEventRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.kafka.config.KafkaListenerEndpointRegistry;
 import org.springframework.kafka.listener.MessageListenerContainer;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -16,6 +18,7 @@ public class VendorIntegrationService {
     private final KafkaListenerEndpointRegistry registry;
     private final OutboundEventRepository repository;
     private final AtomicBoolean consumerPaused = new AtomicBoolean(false);
+    private static final Logger log = LoggerFactory.getLogger(VendorIntegrationService.class);
 
     public VendorIntegrationService(VendorClient vendorClient,
                                     KafkaListenerEndpointRegistry registry,
@@ -30,6 +33,7 @@ public class VendorIntegrationService {
      */
     public void processPayload(String payload) {
         OutboundEvent event = repository.save(new OutboundEvent(payload));
+        log.debug("Queued outbound event {}", event.getId());
         trySend(event);
     }
 
@@ -43,6 +47,7 @@ public class VendorIntegrationService {
                 return;
             }
         }
+        log.debug("All pending events sent");
         resumeConsumer();
     }
 
@@ -51,8 +56,10 @@ public class VendorIntegrationService {
             vendorClient.sendUpdate(event.getPayload());
             event.setStatus(OutboundEvent.Status.SENT);
             repository.save(event);
+            log.info("Sent outbound event {}", event.getId());
             return true;
         } catch (Exception ex) {
+            log.warn("Failed to send outbound event {}: {}", event.getId(), ex.getMessage());
             pauseConsumer();
             return false;
         }
@@ -66,6 +73,7 @@ public class VendorIntegrationService {
         if (container != null) {
             container.pause();
             consumerPaused.set(true);
+            log.info("Kafka consumer paused");
         }
     }
 
@@ -77,6 +85,7 @@ public class VendorIntegrationService {
         if (container != null) {
             container.resume();
             consumerPaused.set(false);
+            log.info("Kafka consumer resumed");
         }
     }
 }

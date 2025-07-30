@@ -4,6 +4,8 @@ import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import io.github.resilience4j.ratelimiter.RateLimiter;
 import io.github.resilience4j.ratelimiter.RateLimiterConfig;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
@@ -18,6 +20,7 @@ public class VendorClient {
     private final String baseUrl;
     private final RateLimiter rateLimiter;
     private final CircuitBreaker circuitBreaker;
+    private static final Logger log = LoggerFactory.getLogger(VendorClient.class);
 
     public VendorClient(@Value("${vendor.api.base-url}") String baseUrl) {
         this.baseUrl = baseUrl;
@@ -45,6 +48,12 @@ public class VendorClient {
 
         Supplier<Void> rateLimited = RateLimiter.decorateSupplier(rateLimiter, supplier);
         Supplier<Void> decorated = CircuitBreaker.decorateSupplier(circuitBreaker, rateLimited);
-        decorated.get();
+        try {
+            decorated.get();
+            log.info("Sent payload to vendor");
+        } catch (Exception ex) {
+            log.error("Vendor call failed: {}", ex.getMessage());
+            throw ex;
+        }
     }
 }

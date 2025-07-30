@@ -4,6 +4,8 @@ import com.companya.realtime.integration.VendorIntegrationService;
 import com.companya.realtime.service.RecordService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.header.Header;
 import org.springframework.kafka.annotation.KafkaListener;
@@ -16,6 +18,7 @@ public class KafkaChangeListener {
     private final RecordService recordService;
     private final VendorIntegrationService vendorService;
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private static final Logger log = LoggerFactory.getLogger(KafkaChangeListener.class);
 
     public KafkaChangeListener(RecordService recordService, VendorIntegrationService vendorService) {
         this.recordService = recordService;
@@ -31,16 +34,22 @@ public class KafkaChangeListener {
         EventAction action = EventAction.fromHeader(getHeader(record, "action"));
         EventType eventType = EventType.from(objectType, action);
 
+        log.debug("Received message key={} objectType={} action={}", key, objectType, action);
+
         JsonNode jsonPayload;
         try {
             jsonPayload = objectMapper.readTree(payload);
         } catch (Exception ex) {
-            // invalid payload, skip
+            log.warn("Malformed JSON for key {}: {}", key, ex.getMessage());
+            ack.acknowledge();
             return;
         }
 
         KafkaEvent event = new KafkaEvent(key, eventType, jsonPayload);
-        handleEvent(event);
+        if (!handleEvent(event)) {
+            ack.acknowledge();
+            return;
+        }
         ack.acknowledge();
     }
 
@@ -52,9 +61,10 @@ public class KafkaChangeListener {
         return new String(header.value());
     }
 
-    private void handleEvent(KafkaEvent event) {
+    private boolean handleEvent(KafkaEvent event) {
         if (event.eventType() == null) {
-            return;
+            log.warn("Unknown event type for key {}", event.key());
+            return false;
         }
 
         switch (event.eventType()) {
@@ -67,5 +77,6 @@ public class KafkaChangeListener {
                 vendorService.processPayload(event.payload().toString());
             }
         }
+        return true;
     }
 }
