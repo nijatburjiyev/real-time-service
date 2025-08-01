@@ -1,15 +1,6 @@
 server:
   port: 8080
 spring:
-  datasource:
-    url: jdbc:h2:file:./data/realtimedb
-    username: sa
-    password: 
-    driver-class-name: org.h2.Driver
-  jpa:
-    hibernate:
-      ddl-auto: update
-    database-platform: org.hibernate.dialect.H2Dialect
   kafka:
     consumer:
       bootstrap-servers: localhost:9092
@@ -17,3 +8,22 @@ spring:
 vendor:
   api:
     base-url: https://vendor.example/api
+
+resilience4j:
+  retry:
+    instances:
+      vendorRetry:
+        maxAttempts: 3
+        waitDuration: 1s
+  ratelimiter:
+    instances:
+      vendorRateLimiter:
+        limitForPeriod: 20
+        limitRefreshPeriod: 1m
+        timeoutDuration: 2s
+  circuitbreaker:
+    instances:
+      vendorCircuitBreaker:
+        failureRateThreshold: 50
+        waitDurationInOpenState: 60s
+        slidingWindowSize: 5

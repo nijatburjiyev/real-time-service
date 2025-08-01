@@ -1,6 +1,6 @@
 # Real Time Service
 
-This service ingests change events from Kafka, persists them in an internal H2 database and forwards updates to a vendor REST API.  Daily CSV imports and a nightly UI drift check keep the state database in sync with external systems.  The codebase is intentionally lightweight so it can serve as a starting point for more robust integrations.
+This service consumes change events from Kafka and forwards updates to a vendor REST API. The design relies solely on Kafka for delivery guarantees and uses Resilience4j to handle transient failures with retries, rate limiting and a circuit breaker. No local database is required.
 
 ## Building
 
@@ -20,48 +20,29 @@ The application exposes a health endpoint at `http://localhost:8080/actuator/hea
 
 The service is built on Spring Boot and uses the following modules:
 
-- **KafkaChangeListener** – subscribes to the `changes` topic using manual acknowledgments so records are committed only after processing.
-- **RecordService** – stores updates in the `Record` table via Spring Data JPA.
-- **VendorClient** – wraps a `RestTemplate` with Resilience4j rate limiting and a circuit breaker. It allows up to 20 requests per minute and temporarily stops calls when the vendor API is failing.
-- **VendorIntegrationService** – persists outbound payloads as `OutboundEvent` entities and attempts to send them through `VendorClient`. When the vendor API cannot be reached it pauses the Kafka consumer and periodically retries sending queued events.
-- **Logging** – SLF4J loggers across the components provide insight into processing and failures.
-- **Jobs** – `DailyCsvSyncJob` and `UiDriftCorrectionJob` are scheduled placeholders for daily CSV imports and nightly reconciliation with the UI.
-- **Configuration** – `KafkaManualAckConfig` creates a custom listener container factory enabling manual acknowledgments.
-
-The database is an H2 file located at `./data/realtimedb`. Unsent outbound events survive restarts because they are stored in this database.
+- **KafkaChangeListener** – consumes the `changes` topic with manual acknowledgments and validates each record before processing. Permanent failures are published to a `.DLT` topic.
+- **VendorClient** – calls the vendor API and is protected by Resilience4j annotations for retry, rate limiting and a circuit breaker.
+- **VendorIntegrationService** – delegates to `VendorClient` and pauses or resumes the Kafka consumer when the circuit breaker opens or closes. Metrics track sent and failed events.
+- **Configuration** – `KafkaManualAckConfig` provides a listener container factory with a `DefaultErrorHandler` that stops retries after a short backoff and routes messages to the dead letter topic.
 
 ## Data Flow
 
-1. **Kafka ingestion** – `KafkaChangeListener` receives a record, parses headers into an `EventType` and converts the payload to JSON.
-2. **State update** – depending on the event type, `RecordService` upserts or deletes a `Record` entity.
-3. **Vendor update** – `VendorIntegrationService` saves a new `OutboundEvent` row and tries to deliver it via `VendorClient`.
-4. **Acknowledgment** – once the payload is persisted and the outbound event queued, the listener manually acknowledges the Kafka message.
-5. **Retry loop** – a scheduled task calls `flushPending()` every 30 seconds to retry sending any `PENDING` events. If sending fails the Kafka consumer remains paused; once all pending events are sent it resumes.
+1. **Kafka ingestion** – `KafkaChangeListener` parses headers into an `EventType` and converts the payload to JSON.
+2. **Vendor update** – the payload is passed to `VendorIntegrationService` which issues the REST call.
+3. **Acknowledgment** – the listener manually acknowledges the record only when processing completes successfully or the message is sent to the dead letter topic.
 
-This approach ensures that even if the application crashes after persisting an outbound event, the event will be retried on startup without rereading the same Kafka message.
+## Resilience
 
-## Edge Cases and Resilience
-
-- **Poison messages** – malformed JSON is acknowledged and skipped so it cannot repeatedly fail processing.
-- **Vendor API outage** – Failures trigger the Resilience4j circuit breaker and pause the Kafka consumer. The retry loop waits one minute (circuit breaker open state) before attempting to send again.
-- **Application crash** – Because manual acks occur only after saving the outbound event, a crash may lead to the Kafka message being reprocessed. This creates a duplicate `OutboundEvent` but prevents data loss.
-- **Database-first approach** – Records are persisted before contacting the vendor ensuring local state is updated even when vendor calls fail.
-- **High throughput** – With the 20 req/min rate limit, a prolonged vendor outage or a spike in Kafka messages can create a large backlog of `OutboundEvent` rows. They are stored on disk so processing continues when the vendor API recovers.
-- **Vendor failures don't block processing** – Outbound events are stored and retried while Kafka continues acknowledging messages.
-- **Visibility** – Logging statements throughout the service provide insights into message handling and retry behavior.
-- **Database failures** – If the H2 database becomes unavailable, message processing will fail before acknowledgment and Kafka will redeliver the record. The application relies on the underlying database to recover.
-- **Multiple service instances** – The current implementation assumes a single Kafka consumer instance. Running multiple instances would require coordination for pausing/resuming and for processing the same outbound events.
-
-Overall the service guards against vendor downtime and restarts but does not currently handle database corruption or disk exhaustion.
+- **Poison messages** – malformed JSON is immediately sent to the dead letter topic and acknowledged.
+- **Vendor API outage** – the circuit breaker pauses the consumer while open; records are retried a limited number of times by the `DefaultErrorHandler`.
+- **Back-pressure** – when the circuit breaker transitions back to half-open or closed, the consumer is resumed.
 
 ## Configuration
 
-All configuration values live in `src/main/resources/application.yml`:
+Key settings live in `src/main/resources/application.yml`:
 
 ```yaml
 spring:
-  datasource:
-    url: jdbc:h2:file:./data/realtimedb
   kafka:
     consumer:
       bootstrap-servers: localhost:9092
@@ -69,7 +50,24 @@ spring:
 vendor:
   api:
     base-url: https://vendor.example/api
+resilience4j:
+  retry:
+    instances:
+      vendorRetry:
+        maxAttempts: 3
+        waitDuration: 1s
+  ratelimiter:
+    instances:
+      vendorRateLimiter:
+        limitForPeriod: 20
+        limitRefreshPeriod: 1m
+        timeoutDuration: 2s
+  circuitbreaker:
+    instances:
+      vendorCircuitBreaker:
+        failureRateThreshold: 50
+        waitDurationInOpenState: 60s
+        slidingWindowSize: 5
 ```
 
 Replace the vendor `base-url` with the real endpoint when deploying.
-
