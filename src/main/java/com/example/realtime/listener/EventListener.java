@@ -10,6 +10,7 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.kafka.support.KafkaHeaders;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -18,6 +19,9 @@ public class EventListener {
     private final ProcessedEventRepository processedRepo;
     private final FailedEventRepository failedRepo;
     private final VendorClient vendorClient;
+
+    @Value("${app.vendor.paused:false}")
+    private boolean vendorPaused;
 
     public EventListener(ProcessedEventRepository processedRepo,
                          FailedEventRepository failedRepo,
@@ -35,8 +39,12 @@ public class EventListener {
                 ack.acknowledge();
                 return;
             }
-            vendorClient.send(record.value());
-            processedRepo.save(new ProcessedEvent(key));
+            if (vendorPaused) {
+                failedRepo.save(new FailedEvent(key, record.value(), "Vendor paused"));
+            } else {
+                vendorClient.send(record.value());
+                processedRepo.save(new ProcessedEvent(key));
+            }
         } catch (Exception e) {
             failedRepo.save(new FailedEvent(key, record.value(), e.getMessage()));
         } finally {

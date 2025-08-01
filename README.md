@@ -6,8 +6,9 @@ This project demonstrates a minimal middleware service built with Spring Boot. I
 ## Features
 1. **Kafka Listener with Manual Acknowledgment** – messages are acknowledged only after successful processing.
 2. **Idempotency Tracking** – processed event keys are stored in an H2 database to prevent re‑sending.
-3. **Retry and Rate Limiting** – vendor calls are wrapped with Resilience4j to retry failed attempts and limit traffic to 20 requests per minute.
-4. **Failure Table** – after exhausting retries, events are written to a table for manual investigation.
+3. **Retry, Circuit Breaker and Rate Limiting** – vendor calls use Resilience4j annotations to retry failures, stop traffic when the circuit is open and limit requests to 20 per minute.
+4. **Failure Table with Background Retry** – undeliverable events are stored and a scheduled task periodically attempts to resend them.
+5. **Manual Pause Flag** – setting `app.vendor.paused` skips vendor calls so an operator can pause and resume processing.
 
 ## Running the Application
 1. Ensure Kafka is available and update `spring.kafka.bootstrap-servers` and `app.kafka.topic` in `application.properties` if necessary.
@@ -24,7 +25,7 @@ This project demonstrates a minimal middleware service built with Spring Boot. I
 `EventListener` checks whether the incoming event key already exists in `processed_events`. New events are sent to the vendor with the `VendorClient`. Regardless of success or failure, the Kafka offset is acknowledged manually so that messages are not re‑processed accidentally.
 
 ### Vendor Client
-The client leverages Resilience4j `RateLimiter` and `Retry` annotations. The rate limiter allows only 20 requests every minute, while the retry mechanism attempts delivery three times with a short pause. Remaining failures are stored in `failed_events` with the payload and error message.
+The client uses Resilience4j `RateLimiter`, `Retry` and `CircuitBreaker` annotations. Requests are limited to 20 per minute, retried up to three times and the circuit opens after repeated errors to avoid hammering the vendor. When the circuit closes again the next successful call resets it. Failed attempts that exhaust the retry limit are persisted to `failed_events`.
 
 ### Database Entities
 - `ProcessedEvent` – stores unique event keys as proof of successful processing.
@@ -36,7 +37,8 @@ Both entities are handled via Spring Data JPA repositories and persisted automat
 Important settings reside in `application.properties`:
 - Kafka consumer group, manual ack mode and topic name
 - H2 database URL
-- Resilience4j rate limiter and retry parameters
+- Resilience4j retry, circuit breaker and rate limiter parameters
+- `app.vendor.paused` and `app.retry.fixed-delay` to control pause mode and background retries
 
 Adjust these values to match your environment or to switch to a different database.
 
