@@ -1,0 +1,13 @@
+/build/
+.gradle/
+out/
+*.log
+*.iml
+/.idea/
+*.ipr
+*.iws
+*.bak
+# Gradle wrapper
+gradle/wrapper/gradle-wrapper.jar
+# Mac
+.DS_Store
