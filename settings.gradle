@@ -1,0 +1,2 @@
+// Defines the name of the root project
+rootProject.name = 'real-time-service'

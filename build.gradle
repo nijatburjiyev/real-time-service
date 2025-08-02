@@ -1,0 +1,37 @@
+plugins {
+    // Spring Boot plugin manages application packaging and dependency versions
+    id 'org.springframework.boot' version '3.2.5'
+    // Allows using Spring's dependency management without a parent POM
+    id 'io.spring.dependency-management' version '1.1.4'
+    id 'java'
+}
+
+group = 'com.example'
+version = '0.0.1-SNAPSHOT'
+sourceCompatibility = '17'
+
+repositories {
+    // Pull artifacts from Maven Central
+    mavenCentral()
+}
+
+dependencies {
+    // Web layer for REST endpoints and RestTemplate
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    // JPA and H2 database access
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    // Kafka client for listening to change events
+    implementation 'org.springframework.kafka:spring-kafka'
+    // Embedded H2 database used at runtime
+    runtimeOnly 'com.h2database:h2'
+
+    // Testing support with JUnit 5
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    // Mockito extensions for JUnit Jupiter
+    testImplementation 'org.mockito:mockito-junit-jupiter'
+}
+
+test {
+    // Use JUnit Platform for unit tests
+    useJUnitPlatform()
+}
